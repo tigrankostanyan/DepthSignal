@@ -1,0 +1,200 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./trading_screener.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String   @id @default(uuid())
+  email       String?  @unique
+  name        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  settings    UserSettings?
+  watchlists  Watchlist[]
+  alertRules  AlertRule[]
+  presets     SavedFilterPreset[]
+}
+
+model UserSettings {
+  id                           String   @id @default(uuid())
+  userId                       String   @unique
+  user                         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme                        String   @default("dark")
+  decimalPrecision             Int      @default(2)
+  currency                     String   @default("USD")
+  refreshRateMs                Int      @default(1000)
+  defaultPresetId              String?
+  defaultCrossExchangeAggregation Boolean @default(false)
+  wallMinVolumeDefaultUsd      Float    @default(500000)
+  wallMinDurationDefaultSec    Int      @default(15)
+  wallDistanceDefaultPercent   Float    @default(2.5)
+  enabledExchanges             String   @default("BINANCE,BYBIT,OKX")
+  soundEnabled                 Boolean  @default(true)
+  telegramBotToken             String?
+  telegramChatId               String?
+  emailRecipient               String?
+  webhookUrl                   String?
+  updatedAt                    DateTime @updatedAt
+}
+
+model Watchlist {
+  id        String          @id @default(uuid())
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime        @default(now())
+  items     WatchlistItem[]
+}
+
+model WatchlistItem {
+  id          String    @id @default(uuid())
+  watchlistId String
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  symbol      String
+  exchange    String
+  marketType  String
+  notes       String?
+  addedAt     DateTime  @default(now())
+
+  @@unique([watchlistId, symbol, exchange, marketType])
+  @@index([symbol, exchange])
+}
+
+model SavedFilterPreset {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  isDefault Boolean  @default(false)
+  filtersJson String
+  createdAt DateTime @default(now())
+}
+
+model AlertRule {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  enabled         Boolean        @default(true)
+  symbols         String         // JSON array of symbols or "ALL"
+  exchanges       String         // JSON array of exchanges
+  marketTypes     String         // JSON array of market types
+  logic           String         @default("AND") // "AND" | "OR"
+  conditionsJson  String
+  cooldownSeconds Int            @default(300)
+  lastTriggeredAt DateTime?
+  notifyChannels  String         @default("IN_APP")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  triggers        AlertTrigger[]
+
+  @@index([enabled])
+}
+
+model AlertTrigger {
+  id            String    @id @default(uuid())
+  ruleId        String
+  rule          AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleName      String
+  symbol        String
+  exchange      String
+  marketType    String
+  message       String
+  conditionType String
+  metricValue   String
+  triggerPrice  Float
+  channel       String    @default("IN_APP")
+  read          Boolean   @default(false)
+  timestamp     DateTime  @default(now())
+
+  @@index([symbol, exchange])
+  @@index([timestamp])
+  @@index([read])
+}
+
+model DetectedWall {
+  id                  String   @id @default(uuid())
+  symbol              String
+  exchange            String
+  marketType          String
+  side                String   // "BID" | "ASK"
+  price               Float
+  volumeAmount        Float
+  volumeUsd           Float
+  referencePrice      Float    // Spot lastPrice or Futures markPrice
+  distancePercent     Float
+  firstSeenAt         DateTime
+  lastSeenAt          DateTime
+  durationSeconds     Int
+  state               String   // "FORMING" | "CONFIRMED" | "REMOVED" | "FILLED"
+  initialVolumeUsd    Float
+  peakVolumeUsd       Float
+  remainingVolumeUsd  Float
+  isAggregated        Boolean  @default(false)
+  contributingExchanges String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([symbol, exchange, marketType])
+  @@index([state])
+  @@index([firstSeenAt])
+}
+
+model WallHistory {
+  id                  String   @id @default(uuid())
+  symbol              String
+  exchange            String
+  marketType          String
+  side                String
+  price               Float
+  volumeUsd           Float
+  referencePrice      Float
+  distancePercent     Float
+  firstSeenAt         DateTime
+  lastSeenAt          DateTime
+  durationSeconds     Int
+  finalState          String   // "REMOVED" | "FILLED"
+  fillPercentage      Float?
+  peakVolumeUsd       Float
+  isAggregated        Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([symbol, exchange, createdAt])
+  @@index([finalState])
+}
+
+model DailyWallAggregate {
+  id                String   @id @default(uuid())
+  date              String   // "YYYY-MM-DD"
+  symbol            String
+  exchange          String
+  marketType        String
+  wallCount         Int
+  bidWallCount      Int
+  askWallCount      Int
+  avgVolumeUsd      Float
+  peakVolumeUsd     Float
+  avgDurationSeconds Float
+  filledCount       Int
+  removedCount      Int
+  createdAt         DateTime @default(now())
+
+  @@unique([date, symbol, exchange, marketType])
+  @@index([date, symbol])
+}
+
+model BlacklistEntry {
+  id        String   @id @default(uuid())
+  symbol    String?
+  exchange  String?
+  category  String?
+  reason    String
+  addedAt   DateTime @default(now())
+
+  @@index([symbol])
+  @@index([exchange])
+}

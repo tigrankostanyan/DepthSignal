@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-primary: #0b0e11;
+    --bg-secondary: #181a20;
+    --bg-card: #1e2329;
+    --border-color: #2b2f36;
+    --text-main: #eaecef;
+    --text-muted: #848e9c;
+    --color-bid: #0ecb81;
+    --color-ask: #f6465d;
+    --color-accent: #f0b90b;
+  }
+
+  .light {
+    --bg-primary: #f5f6f8;
+    --bg-secondary: #ffffff;
+    --bg-card: #eef1f5;
+    --border-color: #e2e8f0;
+    --text-main: #181a20;
+    --text-muted: #707a8a;
+    --color-bid: #03a66d;
+    --color-ask: #cf304a;
+    --color-accent: #d99a00;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "tnum" on, "lnum" on;
+    background-color: var(--bg-primary);
+    color: var(--text-main);
+    overflow-x: hidden;
+  }
+}
+
+/* Tabular numbers for price ticks */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2b2f36;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3c424d;
+}
+
+/* Flash price animations */
+@keyframes flashGreen {
+  0% { background-color: rgba(14, 203, 129, 0.35); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flashRed {
+  0% { background-color: rgba(246, 70, 93, 0.35); }
+  100% { background-color: transparent; }
+}
+
+.flash-up {
+  animation: flashGreen 0.75s ease-out;
+}
+
+.flash-down {
+  animation: flashRed 0.75s ease-out;
+}
