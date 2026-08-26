@@ -431,3 +431,28 @@ export async function runDomainTests() {
   const res = await fetch('/api/run-tests');
   return res.json();
 }
+
+// ------------------------------------------------
+// TELEGRAM ACCOUNT LINKING & NOTIFICATIONS CLIENT
+// ------------------------------------------------
+export async function fetchTelegramStatus(): Promise<import('../types/index.js').TelegramStatusResponse> {
+  return authFetch('/api/telegram/status');
+}
+
+export async function createTelegramLinkToken(): Promise<import('../types/index.js').TelegramLinkTokenResponse> {
+  return authFetch('/api/telegram/link-token', {
+    method: 'POST'
+  });
+}
+
+export async function sendTelegramTestAlert(): Promise<import('../types/index.js').TelegramTestAlertResponse> {
+  return authFetch('/api/telegram/test-alert', {
+    method: 'POST'
+  });
+}
+
+export async function disconnectTelegram(): Promise<{ success: boolean; message: string }> {
+  return authFetch('/api/telegram/disconnect', {
+    method: 'POST'
+  });
+}

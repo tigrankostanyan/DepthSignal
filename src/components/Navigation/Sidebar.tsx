@@ -96,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="p-1 rounded hover:bg-[#2B2F36] text-[#848E9C] hover:text-[#EAECEF] transition shrink-0 ml-1"
+          className="p-1 rounded hover:bg-[#2B2F36] text-[#848E9C] hover:text-[#EAECEF] transition shrink-0 ml-1 cursor-pointer"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
@@ -112,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center px-3 py-2.5 rounded text-xs font-medium tracking-wide transition group relative ${
+              className={`w-full flex items-center px-3 py-2.5 rounded text-xs font-medium tracking-wide transition group relative cursor-pointer ${
                 isActive
                   ? 'bg-[#2B2F36] text-white border-l-2 border-[#F0B90B]'
                   : 'text-[#848E9C] hover:text-[#EAECEF] hover:bg-[#1E2329]'
@@ -144,13 +144,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-2 border-t border-[#2B2F36] bg-[#181A20]">
           <button
             onClick={onOpenPricing}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-gradient-to-r from-[#F0B90B]/15 to-[#3B82F6]/15 border border-[#F0B90B]/30 hover:border-[#F0B90B] text-xs font-bold text-white transition group"
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-gradient-to-r from-[#F0B90B]/20 via-[#F0B90B]/10 to-[#3B82F6]/15 border border-[#F0B90B]/40 hover:border-[#F0B90B] text-xs font-bold text-[#EAECEF] hover:text-white transition group cursor-pointer shadow-sm"
           >
             <div className="flex items-center space-x-2">
-              <CreditCard size={14} className="text-[#F0B90B]" />
-              <span>Plans & Billing</span>
+              <CreditCard size={15} className="text-[#F0B90B] shrink-0" />
+              <span className="font-bold tracking-tight">Plans & Billing</span>
             </div>
-            <span className="text-[10px] text-[#F0B90B] group-hover:translate-x-0.5 transition font-mono">
+            <span className="text-[10px] font-extrabold text-[#F0B90B] group-hover:translate-x-0.5 transition font-mono px-1.5 py-0.5 rounded bg-[#F0B90B]/20 border border-[#F0B90B]/30">
               PRO →
             </span>
           </button>
@@ -159,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-2 border-t border-[#2B2F36] bg-[#181A20] flex justify-center">
           <button
             onClick={onOpenPricing}
-            className="p-2 rounded-lg bg-[#F0B90B]/10 hover:bg-[#F0B90B]/20 text-[#F0B90B] transition"
+            className="p-2 rounded-lg bg-[#F0B90B]/10 hover:bg-[#F0B90B]/20 text-[#F0B90B] transition cursor-pointer"
             title="Subscription & Billing"
           >
             <CreditCard size={16} />

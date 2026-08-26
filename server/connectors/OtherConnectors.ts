@@ -1,114 +1,349 @@
+import WebSocket from 'ws';
 import { ConnectorStatus, ExchangeId, MarketTicker, MarketType, OrderBookLevel, OrderBookSnapshot, Trade } from '../../src/types/index.js';
+import { CandleEngine } from '../market-data/CandleEngine.js';
 import { BaseExchangeConnector } from './ExchangeConnector.js';
 
 export class BybitConnector extends BaseExchangeConnector {
   public readonly exchangeId: ExchangeId = 'BYBIT';
   public readonly name = 'Bybit (Spot & Linear)';
-  public readonly isProductionReady = false; // Clearly marked as reference adapter awaiting user API config
+  public readonly isProductionReady = true;
 
-  private interval: NodeJS.Timeout | null = null;
+  private spotWs: WebSocket | null = null;
+  private linearWs: WebSocket | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
+  private restPollInterval: NodeJS.Timeout | null = null;
+  private candleEngine: CandleEngine;
+
+  private activeSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'];
 
   constructor() {
     super();
+    this.candleEngine = CandleEngine.getInstance();
     this.status = {
       exchange: 'BYBIT',
-      name: 'Bybit',
+      name: 'Bybit (Spot & Linear)',
       connected: false,
       status: 'DISCONNECTED',
       pingMs: 0,
       lastMessageAt: 0,
-      subscribedSymbolsCount: 4,
-      isProductionReady: false
+      subscribedSymbolsCount: this.activeSymbols.length * 2,
+      isProductionReady: true
     };
   }
 
   public async connect(): Promise<void> {
-    this.updateStatus({ connected: true, status: 'CONNECTED', pingMs: 24, lastMessageAt: Date.now() });
-    
-    // Generates reference stream for Bybit to enable cross-exchange comparison & aggregation testing
-    this.interval = setInterval(() => {
-      this.generateBybitStream();
-    }, 2000);
+    this.updateStatus({ status: 'CONNECTING' });
+
+    try {
+      // 1. Initial REST snapshot fetch
+      await this.fetchRestSnapshot();
+
+      // 2. Connect WebSockets
+      this.initSpotWs();
+      this.initLinearWs();
+
+      // 3. Keepalive ping
+      this.startPing();
+
+      // 4. Background REST sync
+      this.startRestSync();
+    } catch (err: any) {
+      console.warn('[BybitConnector] Connection issue:', err.message);
+      this.updateStatus({ status: 'ERROR', error: err.message });
+    }
   }
 
   public async disconnect(): Promise<void> {
-    if (this.interval) clearInterval(this.interval);
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    if (this.restPollInterval) clearInterval(this.restPollInterval);
+
+    if (this.spotWs) {
+      this.spotWs.removeAllListeners();
+      this.spotWs.close();
+      this.spotWs = null;
+    }
+
+    if (this.linearWs) {
+      this.linearWs.removeAllListeners();
+      this.linearWs.close();
+      this.linearWs = null;
+    }
+
     this.updateStatus({ connected: false, status: 'DISCONNECTED' });
   }
 
-  public subscribeSymbols(symbols: string[], marketType: MarketType): void {}
+  public subscribeSymbols(symbols: string[], marketType: MarketType): void {
+    for (const s of symbols) {
+      const upper = s.toUpperCase();
+      if (!this.activeSymbols.includes(upper)) {
+        this.activeSymbols.push(upper);
+      }
+    }
+    this.updateStatus({ subscribedSymbolsCount: this.activeSymbols.length * 2 });
+  }
+
   public unsubscribeSymbols(symbols: string[], marketType: MarketType): void {}
 
-  private generateBybitStream(): void {
-    // Generate realistic Bybit prices closely following market
-    const symbols = [
-      { s: 'BTCUSDT', basePrice: 94800, type: 'SPOT' as MarketType },
-      { s: 'BTCUSDT', basePrice: 94820, type: 'FUTURES' as MarketType },
-      { s: 'ETHUSDT', basePrice: 2780, type: 'SPOT' as MarketType },
-      { s: 'SOLUSDT', basePrice: 194.5, type: 'SPOT' as MarketType }
-    ];
-
-    for (const item of symbols) {
-      const jitter = (Math.random() - 0.5) * (item.basePrice * 0.001);
-      const price = +(item.basePrice + jitter).toFixed(2);
-      
-      const ticker: MarketTicker = {
-        symbol: item.s,
-        baseAsset: item.s.replace('USDT', ''),
-        quoteAsset: 'USDT',
-        exchange: 'BYBIT',
-        marketType: item.type,
-        category: 'CRYPTO',
-        lastPrice: price,
-        markPrice: item.type === 'FUTURES' ? price + 5 : undefined,
-        percentageChange: +((price - item.basePrice) / item.basePrice * 100 + 1.8).toFixed(2),
-        changesByTimeframe: { '5m': 0.2, '1h': 0.8, '1d': 1.8 },
-        volumeUsd: 1450000000,
-        volume24h: 15300,
-        high24h: +(item.basePrice * 1.03).toFixed(2),
-        low24h: +(item.basePrice * 0.97).toFixed(2),
-        fundingRate: item.type === 'FUTURES' ? 0.00012 : undefined,
-        volatility24h: 3.5,
-        rsi: 54,
-        timestamp: Date.now(),
-        isLive: true
-      };
-      this.emitTicker(ticker);
-
-      // Order book snapshot for Bybit (with realistic levels for wall testing)
-      const bids: OrderBookLevel[] = [];
-      const asks: OrderBookLevel[] = [];
-      for (let i = 1; i <= 15; i++) {
-        const bPrice = +(price * (1 - i * 0.001)).toFixed(2);
-        const aPrice = +(price * (1 + i * 0.001)).toFixed(2);
-        // Add a $300k wall at 1.5% distance for test scenarios
-        const isWallBid = i === 10;
-        const bUsd = isWallBid ? 300000 : 25000 + Math.random() * 20000;
-        const aUsd = 20000 + Math.random() * 20000;
-
-        bids.push({ price: bPrice, amount: bUsd / bPrice, usdVolume: bUsd, wallFlag: isWallBid });
-        asks.push({ price: aPrice, amount: aUsd / aPrice, usdVolume: aUsd });
+  private async fetchRestSnapshot(): Promise<void> {
+    try {
+      // Fetch Spot Tickers
+      const spotRes = await fetch('https://api.bybit.com/v5/market/tickers?category=spot', {
+        signal: AbortSignal.timeout(3500)
+      });
+      if (spotRes.ok) {
+        const spotJson = await spotRes.json();
+        if (spotJson.retCode === 0 && spotJson.result?.list) {
+          for (const item of spotJson.result.list) {
+            if (this.activeSymbols.includes(item.symbol)) {
+              this.handleBybitTicker(item, 'SPOT');
+            }
+          }
+        }
       }
 
-      this.emitOrderBook({
-        symbol: item.s,
-        exchange: 'BYBIT',
-        marketType: item.type,
-        bids,
-        asks,
-        spread: 0.1,
-        spreadPercent: 0.001,
-        timestamp: Date.now()
+      // Fetch Linear Tickers
+      const linearRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear', {
+        signal: AbortSignal.timeout(3500)
       });
+      if (linearRes.ok) {
+        const linearJson = await linearRes.json();
+        if (linearJson.retCode === 0 && linearJson.result?.list) {
+          for (const item of linearJson.result.list) {
+            if (this.activeSymbols.includes(item.symbol)) {
+              this.handleBybitTicker(item, 'FUTURES');
+            }
+          }
+        }
+      }
+
+      // Fetch Real Orderbooks for active symbols
+      for (const sym of this.activeSymbols) {
+        this.fetchOrderBookRest(sym, 'SPOT');
+        this.fetchOrderBookRest(sym, 'FUTURES');
+      }
+
+      this.updateStatus({ connected: true, status: 'CONNECTED', lastMessageAt: Date.now() });
+    } catch (e: any) {
+      console.warn('[BybitConnector] REST fetch note:', e.message);
     }
+  }
+
+  private async fetchOrderBookRest(symbol: string, marketType: MarketType): Promise<void> {
+    try {
+      const category = marketType === 'FUTURES' ? 'linear' : 'spot';
+      const res = await fetch(`https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${symbol}&limit=25`, {
+        signal: AbortSignal.timeout(3000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.retCode === 0 && json.result) {
+          this.handleBybitOrderBook(json.result, marketType);
+        }
+      }
+    } catch (e) {
+      // quiet
+    }
+  }
+
+  private initSpotWs(): void {
+    try {
+      this.spotWs = new WebSocket('wss://stream.bybit.com/v5/public/spot');
+
+      this.spotWs.on('open', () => {
+        this.updateStatus({ connected: true, status: 'CONNECTED', lastMessageAt: Date.now() });
+        const args = [
+          ...this.activeSymbols.map(s => `tickers.${s}`),
+          ...this.activeSymbols.map(s => `orderbook.25.${s}`)
+        ];
+        this.spotWs?.send(JSON.stringify({ op: 'subscribe', args }));
+      });
+
+      this.spotWs.on('message', (data: WebSocket.Data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.topic?.startsWith('tickers.')) {
+            this.handleBybitTicker(msg.data, 'SPOT');
+          } else if (msg.topic?.startsWith('orderbook.')) {
+            this.handleBybitOrderBook(msg.data, 'SPOT');
+          }
+        } catch (e) {}
+      });
+
+      this.spotWs.on('error', (err) => {
+        console.warn('[BybitConnector] Spot WS Error:', err.message);
+      });
+
+      this.spotWs.on('close', () => {
+        setTimeout(() => {
+          if (this.status.status !== 'DISCONNECTED') this.initSpotWs();
+        }, 5000);
+      });
+    } catch (e: any) {
+      console.warn('[BybitConnector] Failed to initialize Spot WS:', e.message);
+    }
+  }
+
+  private initLinearWs(): void {
+    try {
+      this.linearWs = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+
+      this.linearWs.on('open', () => {
+        this.updateStatus({ connected: true, status: 'CONNECTED', lastMessageAt: Date.now() });
+        const args = [
+          ...this.activeSymbols.map(s => `tickers.${s}`),
+          ...this.activeSymbols.map(s => `orderbook.25.${s}`)
+        ];
+        this.linearWs?.send(JSON.stringify({ op: 'subscribe', args }));
+      });
+
+      this.linearWs.on('message', (data: WebSocket.Data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.topic?.startsWith('tickers.')) {
+            this.handleBybitTicker(msg.data, 'FUTURES');
+          } else if (msg.topic?.startsWith('orderbook.')) {
+            this.handleBybitOrderBook(msg.data, 'FUTURES');
+          }
+        } catch (e) {}
+      });
+
+      this.linearWs.on('error', (err) => {
+        console.warn('[BybitConnector] Linear WS Error:', err.message);
+      });
+
+      this.linearWs.on('close', () => {
+        setTimeout(() => {
+          if (this.status.status !== 'DISCONNECTED') this.initLinearWs();
+        }, 5000);
+      });
+    } catch (e: any) {
+      console.warn('[BybitConnector] Failed to initialize Linear WS:', e.message);
+    }
+  }
+
+  private handleBybitTicker(raw: any, marketType: MarketType): void {
+    const symbol = raw.symbol || raw.s;
+    if (!symbol) return;
+
+    const lastPrice = parseFloat(raw.lastPrice || raw.lp || '0');
+    if (!lastPrice || isNaN(lastPrice)) return;
+
+    const price24hPcnt = parseFloat(raw.price24hPcnt || '0') * 100;
+    const volume24h = parseFloat(raw.volume24h || raw.v || '0');
+    const turnover24h = parseFloat(raw.turnover24h || '0');
+    const high24h = parseFloat(raw.highPrice24h || raw.h || String(lastPrice));
+    const low24h = parseFloat(raw.lowPrice24h || raw.l || String(lastPrice));
+
+    const markPrice = raw.markPrice ? parseFloat(raw.markPrice) : undefined;
+    const indexPrice = raw.indexPrice ? parseFloat(raw.indexPrice) : undefined;
+    const fundingRate = raw.fundingRate ? parseFloat(raw.fundingRate) : undefined;
+    const nextFundingTime = raw.nextFundingTime ? parseInt(raw.nextFundingTime, 10) : undefined;
+    const openInterest = raw.openInterestValue ? parseFloat(raw.openInterestValue) : undefined;
+
+    const timestamp = Date.now();
+    this.candleEngine.recordPriceUpdate('BYBIT', marketType, symbol, lastPrice, volume24h, timestamp);
+
+    const indicators = this.candleEngine.computeIndicators('BYBIT', marketType, symbol, lastPrice);
+    const timeframeChanges = this.candleEngine.computeTimeframeChanges('BYBIT', marketType, symbol, lastPrice, price24hPcnt);
+
+    const ticker: MarketTicker = {
+      symbol,
+      baseAsset: symbol.replace(/USDT$|USDC$|PERP$/, ''),
+      quoteAsset: 'USDT',
+      exchange: 'BYBIT',
+      marketType,
+      category: 'CRYPTO',
+      lastPrice,
+      markPrice,
+      indexPrice,
+      percentageChange: +price24hPcnt.toFixed(2),
+      changesByTimeframe: timeframeChanges,
+      volumeUsd: turnover24h > 0 ? turnover24h : volume24h * lastPrice,
+      volume24h,
+      high24h,
+      low24h,
+      fundingRate,
+      nextFundingTime,
+      openInterest,
+      volatility24h: low24h > 0 ? +(((high24h - low24h) / low24h) * 100).toFixed(2) : undefined,
+      rsi: indicators.rsi,
+      atr: indicators.atr,
+      bbWidth: indicators.bbWidth,
+      ma20Distance: indicators.ma20Distance,
+      ma50Distance: indicators.ma50Distance,
+      ma200Distance: indicators.ma200Distance,
+      macd: indicators.macd,
+      timestamp,
+      isLive: true
+    };
+
+    this.updateStatus({ lastMessageAt: timestamp });
+    this.emitTicker(ticker);
+  }
+
+  private handleBybitOrderBook(raw: any, marketType: MarketType): void {
+    const symbol = raw.s || raw.symbol;
+    if (!symbol) return;
+
+    const bids: OrderBookLevel[] = (raw.b || raw.bids || []).map((b: string[]) => {
+      const price = parseFloat(b[0]);
+      const amount = parseFloat(b[1]);
+      return { price, amount, usdVolume: price * amount };
+    }).filter((l: OrderBookLevel) => l.amount > 0);
+
+    const asks: OrderBookLevel[] = (raw.a || raw.asks || []).map((a: string[]) => {
+      const price = parseFloat(a[0]);
+      const amount = parseFloat(a[1]);
+      return { price, amount, usdVolume: price * amount };
+    }).filter((l: OrderBookLevel) => l.amount > 0);
+
+    bids.sort((a, b) => b.price - a.price);
+    asks.sort((a, b) => a.price - b.price);
+
+    const bestBid = bids[0]?.price || 0;
+    const bestAsk = asks[0]?.price || 0;
+    const spread = bestAsk > 0 && bestBid > 0 ? +(bestAsk - bestBid).toFixed(4) : 0;
+    const spreadPercent = bestBid > 0 ? +((spread / bestBid) * 100).toFixed(4) : 0;
+
+    const snapshot: OrderBookSnapshot = {
+      symbol,
+      exchange: 'BYBIT',
+      marketType,
+      bids,
+      asks,
+      spread,
+      spreadPercent,
+      timestamp: raw.ts || Date.now(),
+      lastUpdateId: raw.u || raw.seq
+    };
+
+    this.emitOrderBook(snapshot);
+  }
+
+  private startPing(): void {
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    this.pingInterval = setInterval(() => {
+      if (this.spotWs && this.spotWs.readyState === WebSocket.OPEN) {
+        this.spotWs.send(JSON.stringify({ op: 'ping' }));
+      }
+      if (this.linearWs && this.linearWs.readyState === WebSocket.OPEN) {
+        this.linearWs.send(JSON.stringify({ op: 'ping' }));
+      }
+    }, 20000);
+  }
+
+  private startRestSync(): void {
+    if (this.restPollInterval) clearInterval(this.restPollInterval);
+    this.restPollInterval = setInterval(() => {
+      this.fetchRestSnapshot();
+    }, 15000);
   }
 }
 
-// Modular Connectors for other exchanges (MEXC, OKX, GATE, BITGET, KUCOIN, HYPERLIQUID, ASTERDEX, STOCKS)
 export class GenericExchangeAdapter extends BaseExchangeConnector {
   public readonly exchangeId: ExchangeId;
   public readonly name: string;
-  public readonly isProductionReady: boolean = false;
+  public readonly isProductionReady = false;
 
   constructor(exchangeId: ExchangeId, name: string) {
     super();
@@ -142,9 +377,7 @@ export class GenericExchangeAdapter extends BaseExchangeConnector {
 export class StockExchangeConnector extends BaseExchangeConnector {
   public readonly exchangeId: ExchangeId = 'STOCK_EXCHANGE';
   public readonly name = 'Stock Markets (NASDAQ / NYSE)';
-  public readonly isProductionReady = true;
-
-  private timer: NodeJS.Timeout | null = null;
+  public readonly isProductionReady = false;
 
   constructor() {
     super();
@@ -152,78 +385,35 @@ export class StockExchangeConnector extends BaseExchangeConnector {
       exchange: 'STOCK_EXCHANGE',
       name: 'US Equities (NASDAQ / NYSE)',
       connected: false,
-      status: 'DISCONNECTED',
-      pingMs: 15,
+      status: 'NOT_CONFIGURED',
+      pingMs: 0,
       lastMessageAt: 0,
-      subscribedSymbolsCount: 6,
-      isProductionReady: true
+      subscribedSymbolsCount: 0,
+      error: 'Real stock market data API key (e.g. Finnhub / Polygon) required in environment. Synthetic stock data is strictly disabled.',
+      isProductionReady: false
     };
   }
 
   public async connect(): Promise<void> {
-    this.updateStatus({ connected: true, status: 'CONNECTED', pingMs: 12, lastMessageAt: Date.now() });
-    this.emitStockTickers();
-    this.timer = setInterval(() => this.emitStockTickers(), 3000);
+    // If a live stock API key is available in environment, we would connect here.
+    // Otherwise, we strictly keep the status as NOT_CONFIGURED and emit NO fake data.
+    const hasFinnhubKey = !!process.env.FINNHUB_API_KEY;
+    const hasPolygonKey = !!process.env.POLYGON_API_KEY;
+
+    if (!hasFinnhubKey && !hasPolygonKey) {
+      this.updateStatus({
+        connected: false,
+        status: 'NOT_CONFIGURED',
+        error: 'Stock Data Provider Key required in settings. Synthetic stock data is disabled.'
+      });
+      return;
+    }
   }
 
   public async disconnect(): Promise<void> {
-    if (this.timer) clearInterval(this.timer);
     this.updateStatus({ connected: false, status: 'DISCONNECTED' });
   }
 
   public subscribeSymbols(symbols: string[], marketType: MarketType): void {}
   public unsubscribeSymbols(symbols: string[], marketType: MarketType): void {}
-
-  private emitStockTickers(): void {
-    const stocks = [
-      { s: 'NVDA', base: 'NVDA', name: 'Nvidia Corp', p: 138.45, ch: 2.85, vol: 4500000000, mktCap: 3380000000000, pe: 48.5, eps: 2.85, sec: 'Technology', ind: 'Semiconductors' },
-      { s: 'AAPL', base: 'AAPL', name: 'Apple Inc', p: 232.10, ch: 0.65, vol: 2800000000, mktCap: 3520000000000, pe: 34.2, eps: 6.78, sec: 'Technology', ind: 'Consumer Electronics' },
-      { s: 'MSFT', base: 'MSFT', name: 'Microsoft', p: 428.30, ch: 1.15, vol: 2100000000, mktCap: 3180000000000, pe: 36.1, eps: 11.86, sec: 'Technology', ind: 'Software' },
-      { s: 'AMZN', base: 'AMZN', name: 'Amazon', p: 215.60, ch: -0.45, vol: 1900000000, mktCap: 2260000000000, pe: 42.0, eps: 5.12, sec: 'Consumer Cyclical', ind: 'E-Commerce' },
-      { s: 'TSLA', base: 'TSLA', name: 'Tesla Inc', p: 342.50, ch: 4.80, vol: 3900000000, mktCap: 1090000000000, pe: 95.2, eps: 3.60, sec: 'Automotive', ind: 'EV & Clean Tech' },
-      { s: 'META', base: 'META', name: 'Meta Platforms', p: 685.20, ch: 1.95, vol: 1600000000, mktCap: 1740000000000, pe: 28.4, eps: 24.12, sec: 'Communication', ind: 'Internet Content' }
-    ];
-
-    for (const st of stocks) {
-      const jitter = (Math.random() - 0.5) * 0.4;
-      const currentPrice = +(st.p + jitter).toFixed(2);
-
-      const ticker: MarketTicker = {
-        symbol: st.s,
-        baseAsset: st.base,
-        quoteAsset: 'USD',
-        exchange: 'STOCK_EXCHANGE',
-        marketType: 'SPOT',
-        category: 'STOCKS',
-        lastPrice: currentPrice,
-        percentageChange: +(st.ch + (jitter / st.p) * 100).toFixed(2),
-        changesByTimeframe: {
-          '5m': 0.1,
-          '15m': 0.25,
-          '1h': 0.65,
-          '4h': 1.2,
-          '1d': st.ch
-        },
-        volumeUsd: st.vol,
-        volume24h: st.vol / currentPrice,
-        high24h: +(st.p * 1.02).toFixed(2),
-        low24h: +(st.p * 0.985).toFixed(2),
-        volatility24h: 3.5,
-        rsi: 61,
-        atr: 4.2,
-        bbWidth: 2.8,
-        ma20Distance: 2.1,
-        ma50Distance: 4.5,
-        ma200Distance: 12.8,
-        marketCap: st.mktCap,
-        peRatio: st.pe,
-        eps: st.eps,
-        sector: st.sec,
-        industry: st.ind,
-        timestamp: Date.now(),
-        isLive: true
-      };
-      this.emitTicker(ticker);
-    }
-  }
 }

@@ -13,16 +13,17 @@
     --color-accent: #f0b90b;
   }
 
+  html.light,
   .light {
-    --bg-primary: #f5f6f8;
+    --bg-primary: #f8fafc;
     --bg-secondary: #ffffff;
-    --bg-card: #eef1f5;
+    --bg-card: #ffffff;
     --border-color: #e2e8f0;
-    --text-main: #181a20;
-    --text-muted: #707a8a;
-    --color-bid: #03a66d;
-    --color-ask: #cf304a;
-    --color-accent: #d99a00;
+    --text-main: #0f172a;
+    --text-muted: #475569;
+    --color-bid: #16a34a;
+    --color-ask: #e11d48;
+    --color-accent: #d97706;
   }
 
   body {
@@ -32,9 +33,299 @@
     color: var(--text-main);
     overflow-x: hidden;
   }
+
+  button, 
+  [role="button"] {
+    cursor: pointer;
+  }
 }
 
-/* Tabular numbers for price ticks */
+/* =========================================================================
+   LIGHT MODE: MINIMALIST, REFINED & EYE-SAFE PALETTE (LINEAR/STRIPE INSPIRED)
+   ========================================================================= */
+html.light,
+.light {
+  color-scheme: light;
+}
+
+/* 1. Global Backgrounds & Cards */
+.light body,
+.light #root,
+.light [class*="bg-[#0B0E11]"],
+.light [class*="bg-[#0b0e11]"] {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+.light [class*="bg-[#181A20]"],
+.light [class*="bg-[#181a20]"],
+.light [class*="bg-[#121418]"],
+.light [class*="bg-[#121418]"],
+.light [class*="bg-[#1E2329]"],
+.light [class*="bg-[#1e2329]"],
+.light [class*="bg-[#20232A]"],
+.light [class*="bg-[#20232a]"] {
+  background-color: #ffffff !important;
+}
+
+.light [class*="bg-[#2B2F36]"],
+.light [class*="bg-[#2b2f36]"] {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Subtle Interactive Hovers */
+.light [class*="hover:bg-[#2B2F36]"]:hover,
+.light [class*="hover:bg-[#2b2f36]"]:hover,
+.light [class*="hover:bg-[#34383F]"]:hover,
+.light [class*="hover:bg-[#3B4049]"]:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.light [class*="hover:bg-[#20232A]"]:hover,
+.light [class*="hover:bg-[#20232a]"]:hover,
+.light [class*="hover:bg-[#181A20]"]:hover,
+.light [class*="hover:bg-[#181a20]"]:hover {
+  background-color: #f8fafc !important;
+}
+
+/* 2. Crisp Borders */
+.light [class*="border-[#2B2F36]"],
+.light [class*="border-[#2b2f36]"],
+.light [class*="border-[#374151]"],
+.light [class*="border-[#20232A]"] {
+  border-color: #e2e8f0 !important;
+}
+
+/* 3. High Legibility Typography */
+.light [class*="text-[#EAECEF]"],
+.light [class*="text-[#eaecef]"] {
+  color: #0f172a !important;
+}
+
+.light [class*="text-[#848E9C]"],
+.light [class*="text-[#848e9c]"] {
+  color: #475569 !important;
+}
+
+/* 4. Minimalist Financial Accents (Soft Tint Pills & Badges) */
+/* Brand Amber / Gold */
+.light [class*="text-[#F0B90B]"]:not(button.bg-[#F0B90B] *),
+.light [class*="text-[#f0b90b]"]:not(button.bg-[#F0B90B] *) {
+  color: #b45309 !important;
+}
+
+.light [class*="bg-[#F0B90B]/"],
+.light [class*="bg-[#f0b90b]/"] {
+  background-color: #fef3c7 !important;
+  color: #92400e !important;
+  border-color: #fcd34d !important;
+}
+
+/* Bid / Positive Gains / Support (Soft Emerald) */
+.light [class*="text-[#0ECB81]"],
+.light [class*="text-[#0ecb81]"] {
+  color: #15803d !important;
+}
+
+.light [class*="bg-[#0ECB81]/"],
+.light [class*="bg-[#0ecb81]/"] {
+  background-color: #f0fdf4 !important;
+  color: #15803d !important;
+  border-color: #bbf7d0 !important;
+}
+
+/* Ask / Negative Drops / Resistance (Soft Rose) */
+.light [class*="text-[#F6465D]"],
+.light [class*="text-[#f6465d]"] {
+  color: #be123c !important;
+}
+
+.light [class*="bg-[#F6465D]/"],
+.light [class*="bg-[#f6465d]/"] {
+  background-color: #fff1f2 !important;
+  color: #be123c !important;
+  border-color: #fecdd3 !important;
+}
+
+/* Market Type Pills (SPOT / PERP) */
+.light [class*="bg-purple-500/"],
+.light [class*="bg-purple-500"] {
+  background-color: #f5f3ff !important;
+  color: #6d28d9 !important;
+  border-color: #ddd6fe !important;
+}
+
+.light [class*="bg-sky-500/"],
+.light [class*="bg-sky-500"] {
+  background-color: #f0f9ff !important;
+  color: #0369a1 !important;
+  border-color: #bae6fd !important;
+}
+
+.light [class*="bg-[#3B82F6]/"] {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
+/* 5. Tables Styling (Clean & Minimalist) */
+.light table {
+  background-color: #ffffff !important;
+}
+
+.light table thead {
+  background-color: #f8fafc !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+.light table thead th {
+  color: #475569 !important;
+  font-weight: 700 !important;
+  background-color: #f8fafc !important;
+}
+
+.light table tbody tr:not(.flash-up):not(.flash-down) {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  transition: background-color 0.2s ease;
+}
+
+.light table tbody tr:not(.flash-up):not(.flash-down):hover {
+  background-color: #f8fafc !important;
+}
+
+.light table tbody td {
+  color: #0f172a !important;
+}
+
+.light table tbody td span.font-extrabold {
+  color: #0f172a !important;
+}
+
+.light table tbody td div.text-sm.font-bold {
+  color: #0f172a !important;
+}
+
+.light table tbody td div.text-sm.font-bold:hover,
+.light table tbody td div.text-sm.font-bold:hover span {
+  color: #b45309 !important;
+}
+
+/* Range bar track */
+.light table td div.w-full.bg-\[\#0B0E11\] {
+  background-color: #e2e8f0 !important;
+  border-color: transparent !important;
+}
+
+/* 6. Form Controls & Inputs */
+.light input:not([type="checkbox"]):not([type="radio"]),
+.light select,
+.light textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light input:focus,
+.light select:focus,
+.light textarea:focus {
+  border-color: #94a3b8 !important;
+  outline: none !important;
+}
+
+.light input::placeholder,
+.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+.light kbd {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* 7. Controls & Quick Filters */
+.light .flex.items-center.bg-\[\#181A20\].rounded.border {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .flex.items-center.bg-\[\#181A20\].rounded.border button.bg-\[\#2B2F36\] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  border: 1px solid #cbd5e1 !important;
+  font-weight: 700 !important;
+}
+
+.light button.bg-\[\#1E2329\] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #475569 !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
+}
+
+.light button.bg-\[\#1E2329\]:hover {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* 8. TopBar & Sidebar Elements in Light Mode */
+.light aside {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light aside > div:first-child {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light .fill-\[\#F0B90B\] {
+  fill: #d97706 !important;
+  color: #d97706 !important;
+}
+
+/* 9. Dropdowns, Feeds & Modals */
+.light [data-dropdown="alerts"],
+.light [data-dropdown="search"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04) !important;
+}
+
+.light [data-dropdown="alerts"] > div:first-child {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light [data-dropdown="alerts"] > div:first-child span.font-bold {
+  color: #0f172a !important;
+}
+
+.light [data-dropdown="alerts"] > div.max-h-80 > div {
+  border-color: #f1f5f9 !important;
+}
+
+.light [data-dropdown="alerts"] > div.max-h-80 > div:hover {
+  background-color: #f8fafc !important;
+}
+
+.light [data-dropdown="alerts"] > div:last-child {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Tabular numbers */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
@@ -55,21 +346,78 @@
   background: #3c424d;
 }
 
+.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+.light ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
 /* Flash price animations */
-@keyframes flashGreen {
-  0% { background-color: rgba(14, 203, 129, 0.35); }
-  100% { background-color: transparent; }
+@keyframes flashGreenDark {
+  0% { 
+    background-color: rgba(14, 203, 129, 0.40) !important; 
+    box-shadow: inset 0 0 16px rgba(14, 203, 129, 0.35);
+  }
+  100% { 
+    background-color: transparent; 
+    box-shadow: none;
+  }
 }
 
-@keyframes flashRed {
-  0% { background-color: rgba(246, 70, 93, 0.35); }
-  100% { background-color: transparent; }
+@keyframes flashRedDark {
+  0% { 
+    background-color: rgba(246, 70, 93, 0.40) !important; 
+    box-shadow: inset 0 0 16px rgba(246, 70, 93, 0.35);
+  }
+  100% { 
+    background-color: transparent; 
+    box-shadow: none;
+  }
 }
 
-.flash-up {
-  animation: flashGreen 0.75s ease-out;
+@keyframes flashGreenLight {
+  0% { 
+    background-color: #86efac !important; 
+    box-shadow: inset 0 0 12px rgba(34, 197, 94, 0.3);
+  }
+  100% { 
+    background-color: #ffffff !important; 
+    box-shadow: none;
+  }
 }
 
-.flash-down {
-  animation: flashRed 0.75s ease-out;
+@keyframes flashRedLight {
+  0% { 
+    background-color: #fca5a5 !important; 
+    box-shadow: inset 0 0 12px rgba(239, 68, 68, 0.3);
+  }
+  100% { 
+    background-color: #ffffff !important; 
+    box-shadow: none;
+  }
 }
+
+.flash-up,
+.flash-up td {
+  animation: flashGreenDark 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.flash-down,
+.flash-down td {
+  animation: flashRedDark 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.light .flash-up,
+.light .flash-up td,
+.light tr.flash-up {
+  animation: flashGreenLight 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.light .flash-down,
+.light .flash-down td,
+.light tr.flash-down {
+  animation: flashRedLight 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+

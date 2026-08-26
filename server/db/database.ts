@@ -47,17 +47,34 @@ export class DatabaseService {
     try {
       const SQL = await initSqlJs();
       
+      let loadedFromDisk = false;
       if (fs.existsSync(DB_FILE_PATH)) {
-        const fileBuffer = fs.readFileSync(DB_FILE_PATH);
-        this.db = new SQL.Database(fileBuffer);
-        console.log('[DB] Loaded existing SQLite database from disk');
-      } else {
-        this.db = new SQL.Database();
-        console.log('[DB] Created fresh SQLite database in memory');
+        try {
+          const fileBuffer = fs.readFileSync(DB_FILE_PATH);
+          if (fileBuffer.length > 0) {
+            this.db = new SQL.Database(fileBuffer);
+            this.runIntegrityCheck();
+            this.createTables();
+            loadedFromDisk = true;
+            console.log('[DB] Successfully loaded and validated SQLite database from disk');
+          }
+        } catch (diskErr: any) {
+          console.warn('[DB] Existing SQLite file on disk was corrupted or unreadable. Resetting cleanly:', diskErr.message);
+          try {
+            if (fs.existsSync(DB_FILE_PATH)) {
+              fs.unlinkSync(DB_FILE_PATH);
+            }
+          } catch (_) {}
+          this.db = null;
+        }
       }
 
-      this.createTables();
-      this.runIntegrityCheck();
+      if (!loadedFromDisk || !this.db) {
+        this.db = new SQL.Database();
+        console.log('[DB] Created fresh SQLite database in memory');
+        this.createTables();
+      }
+
       this.seedInitialData();
       this.persistToDisk();
       this.isInitialized = true;
@@ -1994,6 +2011,48 @@ export class DatabaseService {
   // ==========================================
   // NOTIFICATION DELIVERY QUEUE
   // ==========================================
+
+  public recordNotificationDelivery(delivery: Partial<NotificationDelivery> & { userId: string; channel: any; destination?: string }): NotificationDelivery {
+    if (!this.db) throw new Error('Database not initialized');
+    const id = delivery.id || `notif_${crypto.randomUUID().substring(0, 16)}`;
+    const now = delivery.createdAt || Date.now();
+
+    this.db.run(`
+      INSERT OR REPLACE INTO notification_deliveries (
+        id, alert_trigger_id, user_id, channel, destination,
+        status, attempts, max_attempts, next_attempt_at, last_attempt_at,
+        delivered_at, last_error, payload, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      delivery.alertTriggerId || null,
+      delivery.userId,
+      delivery.channel,
+      delivery.destination || null,
+      delivery.status || 'pending',
+      delivery.attempts || 0,
+      delivery.maxAttempts || 4,
+      delivery.nextAttemptAt || null,
+      delivery.lastAttemptAt || null,
+      delivery.deliveredAt || null,
+      delivery.lastError || null,
+      delivery.payload ? JSON.stringify(delivery.payload) : null,
+      now
+    ]);
+    this.schedulePersist();
+
+    return {
+      id,
+      userId: delivery.userId,
+      channel: delivery.channel,
+      destination: delivery.destination || '',
+      status: delivery.status || 'pending',
+      attempts: delivery.attempts || 0,
+      maxAttempts: delivery.maxAttempts || 4,
+      createdAt: now,
+      ...delivery
+    };
+  }
 
   public createNotificationDelivery(delivery: Omit<NotificationDelivery, 'id' | 'createdAt' | 'attempts'>): NotificationDelivery {
     if (!this.db) throw new Error('Database not initialized');

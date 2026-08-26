@@ -192,7 +192,7 @@ export const WallMonitor: React.FC<WallMonitorProps> = ({
                       {/* Instrument */}
                       <td className="py-3 px-4 font-sans">
                         <div className="flex items-center space-x-2">
-                          <span className="font-bold text-white group-hover:text-[#F0B90B] transition text-xs">
+                          <span className="font-bold text-[#EAECEF] group-hover:text-[#F0B90B] transition text-xs">
                             {wall.symbol}
                           </span>
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#0B0E11] text-[#848E9C] border border-[#2B2F36]">
@@ -234,7 +234,7 @@ export const WallMonitor: React.FC<WallMonitorProps> = ({
                       </td>
 
                       {/* Volume USD */}
-                      <td className="py-3 px-4 text-right font-bold text-white">
+                      <td className="py-3 px-4 text-right font-bold text-[#EAECEF]">
                         ${(wall.volumeUsd / 1e6).toFixed(2)}M
                       </td>
 

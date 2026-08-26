@@ -1,5 +1,6 @@
 import { CandleData, ExchangeId, MarketTicker, MarketType, OrderBookSnapshot, ScreenerFilters, Trade } from '../../src/types/index.js';
 import { DatabaseService } from '../db/database.js';
+import { CandleEngine } from './CandleEngine.js';
 
 export class MarketStateService {
   private static instance: MarketStateService;
@@ -10,13 +11,13 @@ export class MarketStateService {
   private orderBooks = new Map<string, OrderBookSnapshot>();
   // Recent trades keyed by `${exchange}:${marketType}:${symbol}`
   private recentTrades = new Map<string, Trade[]>();
-  // Synthetic / historical candles keyed by `${exchange}:${marketType}:${symbol}`
-  private candleSeries = new Map<string, CandleData[]>();
 
   private db: DatabaseService;
+  private candleEngine: CandleEngine;
 
   private constructor() {
     this.db = DatabaseService.getInstance();
+    this.candleEngine = CandleEngine.getInstance();
   }
 
   public static getInstance(): MarketStateService {
@@ -39,8 +40,15 @@ export class MarketStateService {
     const key = this.getKey(ticker.exchange, ticker.marketType, ticker.symbol);
     this.tickers.set(key, ticker);
 
-    // Update candle stream in memory
-    this.updateCandle(ticker);
+    // Update real candle engine with incoming live tick
+    this.candleEngine.recordPriceUpdate(
+      ticker.exchange,
+      ticker.marketType,
+      ticker.symbol,
+      ticker.lastPrice,
+      ticker.volume24h,
+      ticker.timestamp
+    );
   }
 
   public updateOrderBook(orderBook: OrderBookSnapshot): void {
@@ -89,11 +97,52 @@ export class MarketStateService {
   }
 
   public getAllTickers(): MarketTicker[] {
-    return Array.from(this.tickers.values());
+    const now = Date.now();
+    const list = Array.from(this.tickers.values());
+
+    // Enrich with dynamic real-time data freshness state
+    return list.map(t => {
+      const age = now - t.timestamp;
+      let dataFreshness: 'LIVE' | 'STALE' | 'DISCONNECTED' = 'LIVE';
+      let isLive = true;
+
+      if (age > 30000) {
+        dataFreshness = 'DISCONNECTED';
+        isLive = false;
+      } else if (age > 6000) {
+        dataFreshness = 'STALE';
+        isLive = false;
+      }
+
+      return {
+        ...t,
+        dataFreshness,
+        isLive
+      };
+    });
   }
 
   public getTicker(exchange: ExchangeId, marketType: MarketType, symbol: string): MarketTicker | undefined {
-    return this.tickers.get(this.getKey(exchange, marketType, symbol));
+    const ticker = this.tickers.get(this.getKey(exchange, marketType, symbol));
+    if (!ticker) return undefined;
+
+    const age = Date.now() - ticker.timestamp;
+    let dataFreshness: 'LIVE' | 'STALE' | 'DISCONNECTED' = 'LIVE';
+    let isLive = true;
+
+    if (age > 30000) {
+      dataFreshness = 'DISCONNECTED';
+      isLive = false;
+    } else if (age > 6000) {
+      dataFreshness = 'STALE';
+      isLive = false;
+    }
+
+    return {
+      ...ticker,
+      dataFreshness,
+      isLive
+    };
   }
 
   public getOrderBook(exchange: ExchangeId, marketType: MarketType, symbol: string): OrderBookSnapshot | undefined {
@@ -105,68 +154,7 @@ export class MarketStateService {
   }
 
   public getCandles(exchange: ExchangeId, marketType: MarketType, symbol: string, count = 60): CandleData[] {
-    const key = this.getKey(exchange, marketType, symbol);
-    let candles = this.candleSeries.get(key);
-    if (!candles || candles.length === 0) {
-      // Generate initial smooth base candles around current ticker price
-      const ticker = this.getTicker(exchange, marketType, symbol);
-      const basePrice = ticker?.lastPrice || 100;
-      candles = this.generateInitialCandles(basePrice, count);
-      this.candleSeries.set(key, candles);
-    }
-    return candles.slice(-count);
-  }
-
-  private updateCandle(ticker: MarketTicker): void {
-    const key = this.getKey(ticker.exchange, ticker.marketType, ticker.symbol);
-    const candles = this.candleSeries.get(key) || this.generateInitialCandles(ticker.lastPrice, 60);
-    const now = Date.now();
-    const intervalMs = 60 * 1000; // 1m candle interval
-
-    const currentCandle = candles[candles.length - 1];
-    if (currentCandle && now - currentCandle.time < intervalMs) {
-      currentCandle.high = Math.max(currentCandle.high, ticker.lastPrice);
-      currentCandle.low = Math.min(currentCandle.low, ticker.lastPrice);
-      currentCandle.close = ticker.lastPrice;
-      currentCandle.volume += Math.random() * 2;
-    } else {
-      candles.push({
-        time: Math.floor(now / intervalMs) * intervalMs,
-        open: currentCandle ? currentCandle.close : ticker.lastPrice,
-        high: ticker.lastPrice,
-        low: ticker.lastPrice,
-        close: ticker.lastPrice,
-        volume: 1
-      });
-      if (candles.length > 200) candles.shift();
-    }
-    this.candleSeries.set(key, candles);
-  }
-
-  private generateInitialCandles(basePrice: number, count: number): CandleData[] {
-    const list: CandleData[] = [];
-    const now = Date.now();
-    const intervalMs = 60 * 1000;
-    let curr = basePrice * 0.98;
-
-    for (let i = count; i >= 0; i--) {
-      const time = now - i * intervalMs;
-      const change = (Math.random() - 0.49) * (basePrice * 0.003);
-      const open = curr;
-      const close = +(curr + change).toFixed(2);
-      const high = +(Math.max(open, close) + Math.random() * (basePrice * 0.0015)).toFixed(2);
-      const low = +(Math.min(open, close) - Math.random() * (basePrice * 0.0015)).toFixed(2);
-      const volume = +(10 + Math.random() * 40).toFixed(2);
-
-      list.push({ time, open, high, low, close, volume });
-      curr = close;
-    }
-
-    // Ensure the last candle matches basePrice
-    if (list.length > 0) {
-      list[list.length - 1].close = basePrice;
-    }
-    return list;
+    return this.candleEngine.getCandles(exchange, marketType, symbol, count);
   }
 
   public filterTickers(filters: ScreenerFilters): MarketTicker[] {

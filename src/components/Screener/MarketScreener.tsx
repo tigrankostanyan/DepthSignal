@@ -89,7 +89,7 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
 
     if (nextFlashes.size > 0) {
       setFlashingSymbols(nextFlashes);
-      const timer = setTimeout(() => setFlashingSymbols(new Map()), 750);
+      const timer = setTimeout(() => setFlashingSymbols(new Map()), 1000);
       return () => clearTimeout(timer);
     }
   }, [tickers]);
@@ -104,16 +104,206 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
 
   const timeframes: Timeframe[] = ['30s', '1m', '5m', '15m', '1h', '4h', '1d'];
 
-  const getSymbolAvatar = (symbol: string) => {
-    if (symbol.startsWith('BTC')) return { icon: '₿', color: 'text-[#F0B90B]' };
-    if (symbol.startsWith('ETH')) return { icon: 'Ξ', color: 'text-[#627EEA]' };
-    if (symbol.startsWith('SOL')) return { icon: 'S', color: 'text-[#00FFA3]' };
-    if (symbol.startsWith('AVAX')) return { icon: 'A', color: 'text-[#E84142]' };
-    if (symbol.startsWith('BNB')) return { icon: 'B', color: 'text-[#F0B90B]' };
-    if (symbol.startsWith('NVDA') || symbol.startsWith('AAPL') || symbol.startsWith('TSLA')) {
-      return { icon: symbol.slice(0, 1), color: 'text-[#38BDF8]' };
+  // Computed and filtered tickers
+  const filteredAndSortedTickers = React.useMemo(() => {
+    let result = [...tickers];
+
+    // Filter by Market Type
+    if (filters.marketType && filters.marketType !== 'ALL') {
+      result = result.filter(t => t.marketType === filters.marketType);
     }
-    return { icon: symbol.slice(0, 1), color: 'text-slate-200' };
+
+    // Filter by Category
+    if (filters.category && filters.category !== 'ALL') {
+      const targetCat = filters.category === 'CRYPTO' ? 'CRYPTO' : 'STOCKS';
+      result = result.filter(t => t.category === targetCat);
+    }
+
+    // Filter by Search Query
+    if (filters.searchQuery && filters.searchQuery.trim()) {
+      const q = filters.searchQuery.toLowerCase().trim();
+      result = result.filter(t => 
+        t.symbol.toLowerCase().includes(q) || 
+        (t.baseAsset && t.baseAsset.toLowerCase().includes(q)) ||
+        (t.exchange && t.exchange.toLowerCase().includes(q))
+      );
+    }
+
+    // Filter by Only with Walls
+    if (filters.onlyWithWalls) {
+      result = result.filter(t => {
+        const key = `${t.exchange}:${t.marketType}:${t.symbol}`;
+        const wallData = wallsBySymbol.get(key);
+        return wallData && (wallData.bidWalls + wallData.askWalls > 0);
+      });
+    }
+
+    // Filter by Only Watchlist
+    if (filters.onlyWatchlist) {
+      result = result.filter(t => {
+        const key = `${t.exchange}:${t.marketType}:${t.symbol}`;
+        return watchlistedKeys.has(key);
+      });
+    }
+
+    // Filter by Price min/max
+    if (filters.priceMin !== undefined) {
+      result = result.filter(t => t.lastPrice >= filters.priceMin!);
+    }
+    if (filters.priceMax !== undefined) {
+      result = result.filter(t => t.lastPrice <= filters.priceMax!);
+    }
+
+    // Filter by Change min/max
+    if (filters.changeMin !== undefined) {
+      result = result.filter(t => t.percentageChange >= filters.changeMin!);
+    }
+    if (filters.changeMax !== undefined) {
+      result = result.filter(t => t.percentageChange <= filters.changeMax!);
+    }
+
+    // Sorting
+    result.sort((a, b) => {
+      const field = filters.sortBy || 'volumeUsd';
+      let valA: any = a[field];
+      let valB: any = b[field];
+
+      if (field === 'percentageChange' && filters.timeframe) {
+        valA = (a.changesByTimeframe && a.changesByTimeframe[filters.timeframe] !== undefined)
+          ? a.changesByTimeframe[filters.timeframe]!
+          : a.percentageChange;
+        valB = (b.changesByTimeframe && b.changesByTimeframe[filters.timeframe] !== undefined)
+          ? b.changesByTimeframe[filters.timeframe]!
+          : b.percentageChange;
+      }
+
+      if (typeof valA === 'string') {
+        return filters.sortOrder === 'asc' 
+          ? valA.localeCompare(valB)
+          : valB.localeCompare(valA);
+      }
+
+      valA = Number(valA) || 0;
+      valB = Number(valB) || 0;
+
+      return filters.sortOrder === 'asc' ? valA - valB : valB - valA;
+    });
+
+    return result;
+  }, [tickers, filters, wallsBySymbol, watchlistedKeys]);
+
+  const getSymbolAvatar = (symbol: string) => {
+    const s = symbol.toUpperCase();
+    if (s.startsWith('BTC')) {
+      return { 
+        icon: '₿', 
+        bg: 'bg-gradient-to-br from-[#F7931A] to-[#FFAB4A]', 
+        text: 'text-white font-black' 
+      };
+    }
+    if (s.startsWith('ETH')) {
+      return { 
+        icon: 'Ξ', 
+        bg: 'bg-gradient-to-br from-[#627EEA] to-[#8C9EFF]', 
+        text: 'text-white font-bold' 
+      };
+    }
+    if (s.startsWith('SOL')) {
+      return { 
+        icon: '◎', 
+        bg: 'bg-gradient-to-tr from-[#9945FF] via-[#14F195] to-[#00C2FF]', 
+        text: 'text-white font-bold' 
+      };
+    }
+    if (s.startsWith('BNB')) {
+      return { 
+        icon: 'BNB', 
+        bg: 'bg-gradient-to-br from-[#F3BA2F] to-[#FCD535]', 
+        text: 'text-slate-950 font-black text-[10px]' 
+      };
+    }
+    if (s.startsWith('ADA')) {
+      return { 
+        icon: '₳', 
+        bg: 'bg-gradient-to-br from-[#0033AD] to-[#3B82F6]', 
+        text: 'text-white font-bold' 
+      };
+    }
+    if (s.startsWith('XRP')) {
+      return { 
+        icon: '✕', 
+        bg: 'bg-gradient-to-br from-[#23292F] via-[#0088CC] to-[#00AAE4]', 
+        text: 'text-white font-black' 
+      };
+    }
+    if (s.startsWith('DOGE')) {
+      return { 
+        icon: 'Ð', 
+        bg: 'bg-gradient-to-br from-[#C2A633] to-[#E5C358]', 
+        text: 'text-slate-950 font-black' 
+      };
+    }
+    if (s.startsWith('LINK')) {
+      return { 
+        icon: '⬡', 
+        bg: 'bg-gradient-to-br from-[#375BD2] to-[#2563EB]', 
+        text: 'text-white font-bold' 
+      };
+    }
+    if (s.startsWith('AVAX')) {
+      return { 
+        icon: '▲', 
+        bg: 'bg-gradient-to-br from-[#E84142] to-[#EF4444]', 
+        text: 'text-white font-black' 
+      };
+    }
+    if (s.startsWith('SUI')) {
+      return { 
+        icon: '💧', 
+        bg: 'bg-gradient-to-br from-[#2A82E4] to-[#38BDF8]', 
+        text: 'text-white font-bold text-[10px]' 
+      };
+    }
+    if (s.startsWith('DOT')) {
+      return { 
+        icon: '●', 
+        bg: 'bg-gradient-to-br from-[#E6007A] to-[#F43F5E]', 
+        text: 'text-white font-black' 
+      };
+    }
+    if (s.startsWith('MATIC') || s.startsWith('POL')) {
+      return { 
+        icon: 'M', 
+        bg: 'bg-gradient-to-br from-[#8247E5] to-[#A855F7]', 
+        text: 'text-white font-black' 
+      };
+    }
+    if (s.startsWith('NVDA')) {
+      return { 
+        icon: 'N', 
+        bg: 'bg-gradient-to-br from-[#76B900] to-[#84CC16]', 
+        text: 'text-slate-950 font-black' 
+      };
+    }
+    if (s.startsWith('AAPL')) {
+      return { 
+        icon: '', 
+        bg: 'bg-gradient-to-br from-[#64748B] to-[#475569]', 
+        text: 'text-white font-bold' 
+      };
+    }
+    if (s.startsWith('TSLA')) {
+      return { 
+        icon: 'T', 
+        bg: 'bg-gradient-to-br from-[#E82127] to-[#DC2626]', 
+        text: 'text-white font-black' 
+      };
+    }
+    return { 
+      icon: s.slice(0, 1), 
+      bg: 'bg-gradient-to-br from-[#6366F1] to-[#4F46E5]', 
+      text: 'text-white font-bold' 
+    };
   };
 
   return (
@@ -259,14 +449,14 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#2B2F36] font-mono text-[11px]">
-              {tickers.length === 0 ? (
+              {filteredAndSortedTickers.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-16 text-center text-[#848E9C] font-sans text-xs">
                     No market instruments match the active filters or blacklist criteria.
                   </td>
                 </tr>
               ) : (
-                tickers.map((ticker) => {
+                filteredAndSortedTickers.map((ticker) => {
                   const rowKey = `${ticker.exchange}:${ticker.marketType}:${ticker.symbol}`;
                   const flash = flashingSymbols.get(rowKey);
                   const isWatchlisted = watchlistedKeys.has(rowKey);
@@ -289,7 +479,7 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
                     <tr
                       key={rowKey}
                       onClick={() => onSelectSymbol(ticker.symbol, ticker.exchange, ticker.marketType)}
-                      className={`hover:bg-[#2B2F36] transition cursor-pointer group ${
+                      className={`cursor-pointer group hover:bg-[#2B2F36] transition duration-150 ${
                         flash === 'up' ? 'flash-up' : flash === 'down' ? 'flash-down' : ''
                       }`}
                     >
@@ -309,17 +499,21 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* Instrument Symbol & Exchange */}
                       <td className="py-3 px-4 font-sans">
                         <div className="flex items-center space-x-3">
-                          <div className="w-8 h-8 rounded-full bg-[#34383F] flex items-center justify-center font-bold text-xs shrink-0 shadow-inner">
-                            <span className={avatar.color}>{avatar.icon}</span>
+                          <div className={`w-8 h-8 rounded-full ${avatar.bg} flex items-center justify-center text-xs shrink-0 shadow-sm ring-1 ring-black/10`}>
+                            <span className={avatar.text}>{avatar.icon}</span>
                           </div>
                           <div>
-                            <div className="text-sm font-bold text-white group-hover:text-[#F0B90B] transition flex items-center gap-1.5">
-                              <span>{ticker.symbol}</span>
-                              <span className="text-[10px] bg-[#2B2F36] px-1.5 py-0.2 rounded text-[#F0B90B] font-mono">
+                            <div className="text-sm font-bold text-[#EAECEF] group-hover:text-[#F0B90B] transition flex items-center gap-1.5">
+                              <span className="font-extrabold tracking-tight text-[#EAECEF]">{ticker.symbol}</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase ${
+                                ticker.marketType === 'FUTURES' 
+                                  ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30' 
+                                  : 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
+                              }`}>
                                 {ticker.marketType === 'FUTURES' ? 'PERP' : 'SPOT'}
                               </span>
                             </div>
-                            <div className="text-[10px] text-[#848E9C] font-sans">
+                            <div className="text-[11px] text-[#848E9C] font-medium font-sans mt-0.5">
                               {ticker.exchange} {ticker.marketType === 'FUTURES' ? 'Futures' : 'Market'}
                             </div>
                           </div>
@@ -328,11 +522,11 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
 
                       {/* Price */}
                       <td className="py-3 px-3 text-right">
-                        <div className="font-bold text-sm text-[#EAECEF]">
+                        <div className="font-bold text-sm text-[#EAECEF] tabular-nums">
                           ${ticker.lastPrice >= 1 ? ticker.lastPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ticker.lastPrice}
                         </div>
                         {ticker.marketType === 'FUTURES' && ticker.markPrice && (
-                          <div className="text-[10px] text-[#848E9C]">
+                          <div className="text-[10px] text-[#848E9C] font-medium tabular-nums">
                             Mark: ${ticker.markPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         )}
@@ -340,7 +534,11 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
 
                       {/* % Movement */}
                       <td className="py-3 px-3 text-right">
-                        <div className={`text-sm font-medium inline-flex items-center ${isPositive ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
+                        <div className={`text-xs font-bold inline-flex items-center px-2 py-0.5 rounded tabular-nums ${
+                          isPositive 
+                            ? 'bg-[#0ECB81]/15 text-[#0ECB81] border border-[#0ECB81]/30' 
+                            : 'bg-[#F6465D]/15 text-[#F6465D] border border-[#F6465D]/30'
+                        }`}>
                           {isPositive ? '+' : ''}{tfChange.toFixed(2)}%
                         </div>
                       </td>
@@ -348,11 +546,11 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* 24h Range Bar */}
                       <td className="py-3 px-3 hidden md:table-cell">
                         <div className="w-24 mx-auto">
-                          <div className="flex justify-between text-[9px] text-[#848E9C] mb-0.5">
+                          <div className="flex justify-between text-[9px] text-[#848E9C] font-medium mb-0.5 tabular-nums">
                             <span>${ticker.low24h >= 1000 ? `${(ticker.low24h / 1000).toFixed(1)}k` : ticker.low24h}</span>
                             <span>${ticker.high24h >= 1000 ? `${(ticker.high24h / 1000).toFixed(1)}k` : ticker.high24h}</span>
                           </div>
-                          <div className="w-full bg-[#0B0E11] h-1.5 rounded-full overflow-hidden">
+                          <div className="w-full bg-[#0B0E11] h-1.5 rounded-full overflow-hidden border border-[#2B2F36]/50">
                             <div 
                               className="bg-[#F0B90B] h-full rounded-full" 
                               style={{ width: `${rangePct}%` }}
@@ -362,13 +560,13 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
                       </td>
 
                       {/* Volume */}
-                      <td className="py-3 px-4 text-right hidden sm:table-cell text-[#EAECEF] font-medium text-sm">
+                      <td className="py-3 px-4 text-right hidden sm:table-cell text-[#EAECEF] font-bold text-sm">
                         ${ticker.volumeUsd >= 1e9 ? `${(ticker.volumeUsd / 1e9).toFixed(2)}B` : ticker.volumeUsd >= 1e6 ? `${(ticker.volumeUsd / 1e6).toFixed(2)}M` : ticker.volumeUsd.toLocaleString()}
                       </td>
 
                       {/* RSI */}
                       <td className="py-3 px-3 text-right hidden lg:table-cell">
-                        <span className={`text-sm font-medium ${
+                        <span className={`text-sm font-bold ${
                           (ticker.rsi || 50) >= 70 ? 'text-[#F6465D]' : (ticker.rsi || 50) <= 30 ? 'text-[#0ECB81]' : 'text-[#EAECEF]'
                         }`}>
                           {ticker.rsi ? ticker.rsi.toFixed(1) : '50.0'}
@@ -376,25 +574,29 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
                       </td>
 
                       {/* Volatility */}
-                      <td className="py-3 px-3 text-right hidden xl:table-cell text-[#848E9C] text-sm">
+                      <td className="py-3 px-3 text-right hidden xl:table-cell text-[#848E9C] font-medium text-sm">
                         {ticker.volatility24h ? `${ticker.volatility24h.toFixed(1)}%` : '0.8%'}
                       </td>
 
                       {/* Active Walls Status */}
                       <td className="py-3 px-4 text-center">
                         {totalWalls > 0 ? (
-                          <div className="inline-flex items-center gap-1.5">
+                          <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded border shadow-sm ${
+                            primaryWall?.side === 'BID' 
+                              ? 'bg-[#F0B90B]/10 border-[#F0B90B]/40 text-[#F0B90B]' 
+                              : 'bg-[#F6465D]/10 border-[#F6465D]/40 text-[#F6465D]'
+                          }`}>
                             <span className={`w-2 h-2 rounded-full ${
                               primaryWall?.side === 'BID' ? 'bg-[#F0B90B] animate-pulse' : 'bg-[#F6465D]'
                             }`} />
-                            <span className={`text-[10px] font-bold uppercase ${
-                              primaryWall?.side === 'BID' ? 'text-[#F0B90B]' : 'text-[#F6465D]'
-                            }`}>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wide">
                               {primaryWall?.side === 'BID' ? 'Support Wall' : 'Resist. Wall'}
                             </span>
                           </div>
                         ) : (
-                          <span className="text-[10px] text-[#848E9C] uppercase font-sans">Stable</span>
+                          <span className="text-[10px] text-[#848E9C] px-2 py-0.5 rounded bg-[#2B2F36]/50 font-semibold uppercase font-sans">
+                            Stable
+                          </span>
                         )}
                       </td>
 
@@ -414,7 +616,24 @@ export const MarketScreener: React.FC<MarketScreenerProps> = ({
 
         {/* Table Bottom Status / Pagination */}
         <div className="h-10 bg-[#1E2329] border-t border-[#2B2F36] px-4 flex items-center justify-between text-xs text-[#848E9C] flex-none">
-          <div>Showing {tickers.length} active market instruments</div>
+          <div className="flex items-center space-x-2">
+            <span>Showing <strong className="text-[#EAECEF] font-mono">{filteredAndSortedTickers.length}</strong> of <strong className="text-[#EAECEF] font-mono">{tickers.length}</strong> market instruments</span>
+            {filters.category !== 'ALL' && (
+              <span className="px-1.5 py-0.5 rounded bg-[#F0B90B]/10 text-[#F0B90B] text-[10px] font-bold border border-[#F0B90B]/30">
+                {filters.category}
+              </span>
+            )}
+            {filters.marketType !== 'ALL' && (
+              <span className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[10px] font-bold border border-purple-500/30">
+                {filters.marketType}
+              </span>
+            )}
+            {filters.searchQuery && (
+              <span className="px-1.5 py-0.5 rounded bg-[#2B2F36] text-[#EAECEF] text-[10px] font-mono">
+                "{filters.searchQuery}"
+              </span>
+            )}
+          </div>
           <div className="flex gap-2">
             <button className="px-2.5 py-0.5 bg-[#2B2F36] rounded text-[#EAECEF] hover:bg-[#34383F] transition text-[11px]">
               Prev

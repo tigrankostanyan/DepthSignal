@@ -199,7 +199,7 @@ export const AdminPanelView: React.FC = () => {
                   {filteredUsers.map((u) => (
                     <tr key={u.id} className="hover:bg-[#1E2329]/50 transition">
                       <td className="p-3">
-                        <div className="font-bold text-white">{u.name}</div>
+                        <div className="font-bold text-[#EAECEF]">{u.name}</div>
                         <div className="text-[11px] text-[#848E9C] font-mono">{u.email}</div>
                         <div className="text-[9px] text-[#848E9C] font-mono mt-0.5">{u.id}</div>
                       </td>
@@ -207,7 +207,7 @@ export const AdminPanelView: React.FC = () => {
                         <select
                           value={u.role}
                           onChange={(e) => handleRoleChange(u.id, e.target.value as any)}
-                          className="bg-[#0B0E11] border border-[#2B2F36] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#F0B90B]"
+                          className="bg-[#0B0E11] border border-[#2B2F36] rounded px-2 py-1 text-xs text-[#EAECEF] focus:outline-none focus:border-[#F0B90B]"
                         >
                           <option value="TRADER">TRADER</option>
                           <option value="ADMIN">ADMIN</option>
@@ -239,16 +239,16 @@ export const AdminPanelView: React.FC = () => {
                           {u.subscription?.status || 'active'}
                         </span>
                       </td>
-                      <td className="p-3 font-mono font-bold text-white">
+                      <td className="p-3 font-mono font-bold text-[#EAECEF]">
                         {u.usage?.activeAlertRulesCount || 0}
                       </td>
-                      <td className="p-3 font-mono font-bold text-white">
+                      <td className="p-3 font-mono font-bold text-[#EAECEF]">
                         {u.usage?.totalWatchlistItemsCount || 0}
                       </td>
                       <td className="p-3 text-right">
                         <button
                           onClick={() => handlePlanChange(u.id, u.subscription?.plan === 'ADVANCED' ? 'FREE' : 'ADVANCED')}
-                          className="px-2.5 py-1 rounded bg-[#2B2F36] hover:bg-[#34383F] text-xs font-semibold text-white transition"
+                          className="px-2.5 py-1 rounded bg-[#2B2F36] hover:bg-[#34383F] text-xs font-semibold text-[#EAECEF] transition"
                         >
                           Toggle VIP
                         </button>

@@ -593,6 +593,52 @@ async function startApp() {
   });
 
   // ------------------------------------------
+  // PER-USER TELEGRAM LINKING & NOTIFICATIONS
+  // ------------------------------------------
+  const telegramLinkingService = TelegramLinkingService.getInstance();
+
+  // Get user's Telegram connection status
+  app.get('/api/telegram/status', requireAuth, (req: Request, res: Response) => {
+    const status = telegramLinkingService.getStatus(req.user!.id);
+    res.json(status);
+  });
+
+  // Generate cryptographically secure single-use linking token and deep link
+  app.post('/api/telegram/link-token', requireAuth, (req: Request, res: Response) => {
+    const tokenData = telegramLinkingService.createLinkingToken(req.user!.id);
+    res.json(tokenData);
+  });
+
+  // Send real test alert to user's connected Telegram
+  app.post('/api/telegram/test-alert', requireAuth, testAlertTriggerLimiter, async (req: Request, res: Response) => {
+    const result = await telegramLinkingService.sendTestAlert(req.user!.id);
+    if (!result.success) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json(result);
+  });
+
+  // Disconnect user's Telegram
+  app.post('/api/telegram/disconnect', requireAuth, (req: Request, res: Response) => {
+    telegramLinkingService.disconnect(req.user!.id, req.ip);
+    res.json({ success: true, message: 'Telegram account disconnected successfully.' });
+  });
+
+  // Public Telegram Webhook Endpoint for Telegram Bot Updates (/start <token>)
+  app.post('/api/telegram/webhook', async (req: Request, res: Response) => {
+    const secretHeader = req.headers['x-telegram-bot-api-secret-token'] as string | undefined;
+    const result = await telegramLinkingService.processWebhookUpdate(req.body, secretHeader);
+
+    if (result.unauthorized) {
+      res.status(401).json({ error: 'UNAUTHORIZED_WEBHOOK', message: result.error });
+      return;
+    }
+
+    res.json({ ok: true, action: result.action });
+  });
+
+  // ------------------------------------------
   // BILLING & SUBSCRIPTION API
   // ------------------------------------------
   app.get('/api/billing/config', (req: Request, res: Response) => {
@@ -893,7 +939,8 @@ async function startApp() {
       const domainResults = await runAllDomainTests();
       const securityResults = await runSecurityHardeningTests();
       const billingResults = await runBillingAndNotificationTests();
-      const allResults = [...domainResults, ...securityResults, ...billingResults];
+      const telegramResults = await runTelegramLinkingTests();
+      const allResults = [...domainResults, ...securityResults, ...billingResults, ...telegramResults];
 
       res.json({
         total: allResults.length,

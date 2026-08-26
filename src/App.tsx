@@ -60,7 +60,27 @@ export function App() {
   // Navigation & Layout state
   const [activeTab, setActiveTab] = useState<NavTab>('screener');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('quantscreen_theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    }
+    return 'dark';
+  });
+
+  // Sync theme to root HTML element for consistent portal/modal theming
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (theme === 'light') {
+        document.documentElement.classList.add('light');
+        document.documentElement.classList.remove('dark');
+      } else {
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+      }
+      localStorage.setItem('quantscreen_theme', theme);
+    }
+  }, [theme]);
 
   // User & Subscription state
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -372,7 +392,7 @@ export function App() {
   const unreadAlerts = alertTriggers.filter(t => !t.read);
 
   return (
-    <div className={`h-screen w-screen flex overflow-hidden ${theme === 'dark' ? 'bg-[#0B0E11] text-[#EAECEF]' : 'light bg-slate-50 text-slate-900'}`}>
+    <div className={`h-screen w-screen flex overflow-hidden ${theme === 'dark' ? 'dark bg-[#0B0E11] text-[#EAECEF]' : 'light bg-[#f1f3f6] text-[#0f172a]'}`}>
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -397,12 +417,14 @@ export function App() {
           unreadAlerts={unreadAlerts}
           theme={theme}
           toggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          onSelectSymbol={(sym) => handleSelectSymbol(sym)}
+          onSelectSymbol={(sym, ex, mt) => handleSelectSymbol(sym, ex, mt)}
           onOpenTestSimulation={handleTestSimulation}
           activeWallCount={activeWalls.length}
           tickers={tickers}
           plan={subscription?.plan || 'FREE'}
           onOpenPricing={() => openPricingModal()}
+          onMarkAlertRead={handleMarkAlertRead}
+          onNavigateToAlerts={() => setActiveTab('alerts')}
         />
 
         {/* Tab View Router */}

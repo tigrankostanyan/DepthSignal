@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { ExchangeId, MarketTicker, MarketType, OrderBookLevel, OrderBookSnapshot, Trade } from '../../src/types/index.js';
+import { CandleEngine } from '../market-data/CandleEngine.js';
 import { BaseExchangeConnector } from './ExchangeConnector.js';
 
 export class BinanceConnector extends BaseExchangeConnector {
@@ -19,13 +20,14 @@ export class BinanceConnector extends BaseExchangeConnector {
   private pingInterval: NodeJS.Timeout | null = null;
   private pollingInterval: NodeJS.Timeout | null = null;
 
+  private candleEngine: CandleEngine;
+
   // Track latest mark prices and funding rates for futures
   private futuresMarkPrices = new Map<string, { markPrice: number; fundingRate: number; nextFundingTime: number }>();
-  // Track previous prices for technical timeframe estimation
-  private priceHistories = new Map<string, { time: number; price: number }[]>();
 
   constructor() {
     super();
+    this.candleEngine = CandleEngine.getInstance();
     this.status = {
       exchange: 'BINANCE',
       name: 'Binance (Spot & Futures)',
@@ -121,9 +123,22 @@ export class BinanceConnector extends BaseExchangeConnector {
 
   private async fetchInitialRestData(): Promise<void> {
     try {
+      const fetchWithTimeout = async (url: string, ms = 3500) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), ms);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          return res;
+        } catch (e) {
+          clearTimeout(timeoutId);
+          return null;
+        }
+      };
+
       // Spot 24hr tickers
-      const spotRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-      if (spotRes.ok) {
+      const spotRes = await fetchWithTimeout('https://api.binance.com/api/v3/ticker/24hr', 3000);
+      if (spotRes && spotRes.ok) {
         const data: any[] = await spotRes.json();
         for (const item of data) {
           if (this.spotSubscribedSymbols.has(item.symbol)) {
@@ -134,8 +149,8 @@ export class BinanceConnector extends BaseExchangeConnector {
       }
 
       // Futures premiumIndex for markPrice & funding rates
-      const fapiPremiumRes = await fetch('https://fapi.binance.com/fapi/v1/premiumIndex');
-      if (fapiPremiumRes.ok) {
+      const fapiPremiumRes = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/premiumIndex', 3000);
+      if (fapiPremiumRes && fapiPremiumRes.ok) {
         const premiumData: any[] = await fapiPremiumRes.json();
         for (const p of premiumData) {
           if (this.futuresSubscribedSymbols.has(p.symbol)) {
@@ -149,8 +164,8 @@ export class BinanceConnector extends BaseExchangeConnector {
       }
 
       // Futures 24hr tickers
-      const futuresRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
-      if (futuresRes.ok) {
+      const futuresRes = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', 3000);
+      if (futuresRes && futuresRes.ok) {
         const fData: any[] = await futuresRes.json();
         for (const item of fData) {
           if (this.futuresSubscribedSymbols.has(item.symbol)) {
@@ -280,7 +295,6 @@ export class BinanceConnector extends BaseExchangeConnector {
     const data: any = msg.data;
 
     if (stream.endsWith('@markPrice@1s')) {
-      // e: "markPriceUpdate", s: "BTCUSDT", p: "markPrice", r: "fundingRate", T: nextFundingTime
       this.futuresMarkPrices.set(data.s, {
         markPrice: parseFloat(data.p),
         fundingRate: parseFloat(data.r),
@@ -296,7 +310,7 @@ export class BinanceConnector extends BaseExchangeConnector {
     }
   }
 
-  // Normalization logic
+  // Normalization logic with genuine mathematical indicators
   private normalizeBinance24hr(raw: any, marketType: MarketType): MarketTicker {
     const symbol = raw.symbol;
     const baseAsset = symbol.replace(/USDT$|BUSD$|USDC$/, '') || symbol;
@@ -313,7 +327,11 @@ export class BinanceConnector extends BaseExchangeConnector {
     const fundingRate = marketType === 'FUTURES' ? (markData ? markData.fundingRate : 0.0001) : undefined;
     const nextFundingTime = marketType === 'FUTURES' ? (markData ? markData.nextFundingTime : Date.now() + 4 * 3600 * 1000) : undefined;
 
-    this.recordPriceHistory(symbol, lastPrice);
+    const timestamp = Date.now();
+    this.candleEngine.recordPriceUpdate('BINANCE', marketType, symbol, lastPrice, volumeBase, timestamp);
+
+    const indicators = this.candleEngine.computeIndicators('BINANCE', marketType, symbol, lastPrice);
+    const timeframeChanges = this.candleEngine.computeTimeframeChanges('BINANCE', marketType, symbol, lastPrice, priceChangePercent);
 
     return {
       symbol,
@@ -325,21 +343,22 @@ export class BinanceConnector extends BaseExchangeConnector {
       lastPrice,
       markPrice,
       percentageChange: priceChangePercent,
-      changesByTimeframe: this.computeTimeframeChanges(symbol, lastPrice, priceChangePercent),
+      changesByTimeframe: timeframeChanges,
       volumeUsd: volumeQuote,
       volume24h: volumeBase,
       high24h,
       low24h,
       fundingRate,
       nextFundingTime,
-      volatility24h: low24h > 0 ? ((high24h - low24h) / low24h) * 100 : 0,
-      rsi: this.estimateRsi(symbol, lastPrice),
-      atr: (high24h - low24h) * 0.45,
-      bbWidth: 3.2,
-      ma20Distance: 1.1,
-      ma50Distance: 2.8,
-      ma200Distance: 8.5,
-      timestamp: Date.now(),
+      volatility24h: low24h > 0 ? +(((high24h - low24h) / low24h) * 100).toFixed(2) : undefined,
+      rsi: indicators.rsi,
+      atr: indicators.atr,
+      bbWidth: indicators.bbWidth,
+      ma20Distance: indicators.ma20Distance,
+      ma50Distance: indicators.ma50Distance,
+      ma200Distance: indicators.ma200Distance,
+      macd: indicators.macd,
+      timestamp,
       isLive: true
     };
   }
@@ -360,7 +379,11 @@ export class BinanceConnector extends BaseExchangeConnector {
     const fundingRate = marketType === 'FUTURES' ? (markData ? markData.fundingRate : 0.0001) : undefined;
     const nextFundingTime = marketType === 'FUTURES' ? (markData ? markData.nextFundingTime : undefined) : undefined;
 
-    this.recordPriceHistory(symbol, lastPrice);
+    const timestamp = raw.E || Date.now();
+    this.candleEngine.recordPriceUpdate('BINANCE', marketType, symbol, lastPrice, volumeBase, timestamp);
+
+    const indicators = this.candleEngine.computeIndicators('BINANCE', marketType, symbol, lastPrice);
+    const timeframeChanges = this.candleEngine.computeTimeframeChanges('BINANCE', marketType, symbol, lastPrice, priceChangePercent);
 
     return {
       symbol,
@@ -372,21 +395,22 @@ export class BinanceConnector extends BaseExchangeConnector {
       lastPrice,
       markPrice,
       percentageChange: priceChangePercent,
-      changesByTimeframe: this.computeTimeframeChanges(symbol, lastPrice, priceChangePercent),
+      changesByTimeframe: timeframeChanges,
       volumeUsd: volumeQuote,
       volume24h: volumeBase,
       high24h,
       low24h,
       fundingRate,
       nextFundingTime,
-      volatility24h: low24h > 0 ? ((high24h - low24h) / low24h) * 100 : 0,
-      rsi: this.estimateRsi(symbol, lastPrice),
-      atr: (high24h - low24h) * 0.45,
-      bbWidth: 3.2,
-      ma20Distance: 1.1,
-      ma50Distance: 2.8,
-      ma200Distance: 8.5,
-      timestamp: raw.E || Date.now(),
+      volatility24h: low24h > 0 ? +(((high24h - low24h) / low24h) * 100).toFixed(2) : undefined,
+      rsi: indicators.rsi,
+      atr: indicators.atr,
+      bbWidth: indicators.bbWidth,
+      ma20Distance: indicators.ma20Distance,
+      ma50Distance: indicators.ma50Distance,
+      ma200Distance: indicators.ma200Distance,
+      macd: indicators.macd,
+      timestamp,
       isLive: true
     };
   }
@@ -396,13 +420,13 @@ export class BinanceConnector extends BaseExchangeConnector {
       const price = parseFloat(b[0]);
       const amount = parseFloat(b[1]);
       return { price, amount, usdVolume: price * amount };
-    });
+    }).filter((l: OrderBookLevel) => l.amount > 0 && l.price > 0);
 
     const asks: OrderBookLevel[] = (raw.asks || raw.a || []).map((a: string[]) => {
       const price = parseFloat(a[0]);
       const amount = parseFloat(a[1]);
       return { price, amount, usdVolume: price * amount };
-    });
+    }).filter((l: OrderBookLevel) => l.amount > 0 && l.price > 0);
 
     // Sort: bids descending, asks ascending
     bids.sort((a, b) => b.price - a.price);
@@ -410,8 +434,8 @@ export class BinanceConnector extends BaseExchangeConnector {
 
     const bestBid = bids[0]?.price || 0;
     const bestAsk = asks[0]?.price || 0;
-    const spread = bestAsk > 0 && bestBid > 0 ? bestAsk - bestBid : 0;
-    const spreadPercent = bestBid > 0 ? (spread / bestBid) * 100 : 0;
+    const spread = bestAsk > 0 && bestBid > 0 ? +(bestAsk - bestBid).toFixed(4) : 0;
+    const spreadPercent = bestBid > 0 ? +((spread / bestBid) * 100).toFixed(4) : 0;
 
     return {
       symbol,
@@ -430,70 +454,16 @@ export class BinanceConnector extends BaseExchangeConnector {
     const price = parseFloat(raw.p);
     const amount = parseFloat(raw.q);
     return {
-      id: String(raw.t || raw.a || Math.random()),
+      id: String(raw.t || raw.a || Date.now()),
       symbol: raw.s,
       exchange: 'BINANCE',
       marketType,
       price,
       amount,
       usdVolume: price * amount,
-      side: raw.m ? 'SELL' : 'BUY', // In Binance: m = true means the buyer was the maker (i.e. sell taker trade)
+      side: raw.m ? 'SELL' : 'BUY',
       timestamp: raw.T || raw.E || Date.now()
     };
-  }
-
-  private recordPriceHistory(symbol: string, price: number): void {
-    const history = this.priceHistories.get(symbol) || [];
-    const now = Date.now();
-    history.push({ time: now, price });
-    // Keep max 1000 ticks or 2 hours
-    const cutoff = now - 2 * 60 * 60 * 1000;
-    const trimmed = history.filter(h => h.time >= cutoff);
-    this.priceHistories.set(symbol, trimmed);
-  }
-
-  private computeTimeframeChanges(symbol: string, currentPrice: number, change24h: number) {
-    const history = this.priceHistories.get(symbol);
-    const now = Date.now();
-
-    const getChangeForMs = (ms: number, fallbackRatio: number) => {
-      if (!history || history.length < 2) return +(change24h * fallbackRatio).toFixed(2);
-      const targetTime = now - ms;
-      const targetPoint = history.find(h => h.time >= targetTime) || history[0];
-      if (targetPoint && targetPoint.price > 0) {
-        return +(((currentPrice - targetPoint.price) / targetPoint.price) * 100).toFixed(2);
-      }
-      return +(change24h * fallbackRatio).toFixed(2);
-    };
-
-    return {
-      '30s': getChangeForMs(30 * 1000, 0.015),
-      '1m': getChangeForMs(60 * 1000, 0.03),
-      '5m': getChangeForMs(5 * 60 * 1000, 0.08),
-      '15m': getChangeForMs(15 * 60 * 1000, 0.18),
-      '1h': getChangeForMs(60 * 60 * 1000, 0.35),
-      '4h': getChangeForMs(4 * 60 * 60 * 1000, 0.65),
-      '1d': +change24h.toFixed(2)
-    };
-  }
-
-  private estimateRsi(symbol: string, currentPrice: number): number {
-    const history = this.priceHistories.get(symbol);
-    if (!history || history.length < 14) {
-      // Deterministic realistic initial RSI
-      const hash = symbol.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-      return 45 + (hash % 25);
-    }
-    let gains = 0;
-    let losses = 0;
-    for (let i = history.length - 14; i < history.length - 1; i++) {
-      const diff = history[i + 1].price - history[i].price;
-      if (diff >= 0) gains += diff;
-      else losses += Math.abs(diff);
-    }
-    if (losses === 0) return 100;
-    const rs = (gains / 14) / (losses / 14);
-    return +(100 - (100 / (1 + rs))).toFixed(1);
   }
 
   private reconnectSpotWs(): void {
@@ -517,7 +487,6 @@ export class BinanceConnector extends BaseExchangeConnector {
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= 10) return;
     this.reconnectAttempts++;
-    // Exponential backoff with jitter
     const delay = Math.min(this.maxReconnectDelay, 1000 * Math.pow(1.5, this.reconnectAttempts)) + Math.random() * 1000;
     console.log(`[BinanceConnector] Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${this.reconnectAttempts})...`);
     setTimeout(() => {
@@ -542,7 +511,6 @@ export class BinanceConnector extends BaseExchangeConnector {
     if (this.pollingInterval) clearInterval(this.pollingInterval);
     this.pollingInterval = setInterval(async () => {
       try {
-        // Poll futures funding rates
         const premiumRes = await fetch('https://fapi.binance.com/fapi/v1/premiumIndex');
         if (premiumRes.ok) {
           const pData: any[] = await premiumRes.json();
