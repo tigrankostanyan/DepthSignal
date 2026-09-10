@@ -1,16 +1,22 @@
+// Load env BEFORE any other imports (same as server.ts)
+import '../src/env.js';
+
 import WebSocket from 'ws';
-import { DatabaseService } from '../db/database.js';
-import { MarketStateService } from '../market-data/MarketStateService.js';
-import { WallEngine } from '../wall-engine/WallEngine.js';
-import { AlertEngine } from '../alert-engine/AlertEngine.js';
-import { BinanceConnector } from '../connectors/BinanceConnector.js';
+import { DatabaseService } from '../src/db/database.js';
+import { AuthService } from '../src/services/auth/AuthService.js';
+import { MarketStateService } from '../src/services/market-data/MarketStateService.js';
+import { WallEngine } from '../src/services/wall-engine/WallEngine.js';
+import { AlertEngine } from '../src/services/alert-engine/AlertEngine.js';
+import { BinanceConnector } from '../src/services/connectors/BinanceConnector.js';
+import { AsterDEXConnector, BitgetConnector, BybitConnector, GateConnector, HyperliquidConnector, KuCoinConnector, MEXCConnector, OKXConnector } from '../src/services/connectors/OtherConnectors.js';
+import { ConnectorManager } from '../src/services/connectors/ConnectorManager.js';
 import { 
   MarketTicker, 
   OrderBookSnapshot, 
   DetectedWall, 
   AlertRule, 
   AlertTrigger
-} from '../../src/types/index.js';
+} from '../src/types/index.js';
 
 interface TestSectionResult {
   section: string;
@@ -28,15 +34,94 @@ function record(section: string, name: string, passed: boolean, evidence: string
   console.log(`[${status}] [${section}] ${name}: ${evidence}`);
 }
 
+interface LiveExchangeCheck {
+  marker: string;
+  sectionTag: string;
+  displayName: string;
+  connector: any;
+  expected: { symbol: string; marketType: string }[];
+  durationMs?: number;
+}
+
+// Shared helper: connect a real connector, capture live ticks + order books for N
+// seconds, then verify every expected symbol produced a live price and depth.
+async function runLiveExchangeCheck(check: LiveExchangeCheck): Promise<void> {
+  console.log(`\n>>> [${check.marker}] ${check.displayName}...`);
+  const durationMs = check.durationMs || 12000;
+
+  let totalTickers = 0;
+  let totalBooks = 0;
+  const lastPrices = new Map<string, number>();
+  const bookDepths = new Map<string, { bids: number; asks: number }>();
+  const keyOf = (symbol: string, marketType: string) => `${marketType}_${symbol}`;
+
+  check.connector.onTicker((ticker: MarketTicker) => {
+    totalTickers++;
+    lastPrices.set(keyOf(ticker.symbol, ticker.marketType), ticker.lastPrice);
+  });
+  check.connector.onOrderBook((ob: OrderBookSnapshot) => {
+    totalBooks++;
+    bookDepths.set(keyOf(ob.symbol, ob.marketType), { bids: ob.bids.length, asks: ob.asks.length });
+  });
+
+  let connectError: string | null = null;
+  try {
+    await check.connector.connect();
+  } catch (err: any) {
+    connectError = err.message;
+  }
+  await new Promise(r => setTimeout(r, durationMs));
+  try { await check.connector.disconnect(); } catch { /* noop */ }
+
+  const gotSymbols = check.expected.filter(e => (lastPrices.get(keyOf(e.symbol, e.marketType)) || 0) > 0);
+  const first = check.expected[0];
+  const firstDepth = bookDepths.get(keyOf(first.symbol, first.marketType));
+
+  const passed = Boolean(
+    !connectError &&
+    totalTickers > 0 &&
+    totalBooks > 0 &&
+    gotSymbols.length === check.expected.length &&
+    firstDepth && firstDepth.bids > 0 && firstDepth.asks > 0
+  );
+
+  const priceSummary = gotSymbols
+    .map(e => `${e.symbol}: $${lastPrices.get(keyOf(e.symbol, e.marketType))?.toLocaleString()}`)
+    .join(', ');
+
+  record(
+    check.sectionTag,
+    check.displayName.replace('Testing Live ', 'Live '),
+    passed,
+    passed
+      ? `PASSED: Captured ${totalTickers} ticks, ${totalBooks} orderbooks across ${gotSymbols.length}/${check.expected.length} symbols. Live ${priceSummary}. ${first.symbol} Book depth: ${firstDepth?.bids} bids / ${firstDepth?.asks} asks.`
+      : `FAILED: connectError=${connectError}, ticks=${totalTickers}, books=${totalBooks}, symbolsMatched=${gotSymbols.length}/${check.expected.length}.`,
+    {
+      totalTickers,
+      totalBooks,
+      connectError,
+      lastPrices: Object.fromEntries(lastPrices),
+      bookDepths: Object.fromEntries(bookDepths)
+    }
+  );
+}
+
 async function runVerification() {
   console.log('====================================================');
   console.log('  STARTING COMPREHENSIVE RUNTIME VERIFICATION SUITE ');
   console.log('====================================================\n');
 
+  // Records created by this suite are bound to a real registered user.
+  const db = DatabaseService.getInstance();
+  await db.initialize();
+  const authService = AuthService.getInstance();
+  const testUser = await authService.register(`verif_${Date.now()}@test.local`, 'SecurePassword123!', 'Verification User');
+  const TEST_USER_ID = testUser.user.id;
+
   // -------------------------------------------------------------
   // PART 1: DATABASE PERSISTENCE ACROSS RESTART
   // -------------------------------------------------------------
-  console.log('>>> [1/7] Testing SQLite Persistence Across Service Restarts...');
+  console.log('>>> [1/10] Testing SQLite Persistence Across Service Restarts...');
   try {
     const db = DatabaseService.getInstance();
     await db.initialize();
@@ -44,16 +129,16 @@ async function runVerification() {
     // 1. Create unique test records
     const testTimestamp = Date.now();
     const testWatchlistName = `Verify_Watchlist_${testTimestamp}`;
-    const newWatchlist = db.createWatchlist(testWatchlistName);
-    db.addWatchlistItem(newWatchlist.id, {
+    const newWatchlist = await db.createWatchlist(testWatchlistName, TEST_USER_ID);
+    await db.addWatchlistItem(newWatchlist.id, {
       symbol: 'SOLUSDT',
       exchange: 'BINANCE',
       marketType: 'SPOT',
       notes: 'SOL item test'
-    });
+    }, TEST_USER_ID);
 
     const testRuleName = `Verify_Rule_${testTimestamp}`;
-    const newRule = db.saveAlertRule({
+    const newRule = await db.saveAlertRule({
       name: testRuleName,
       enabled: true,
       symbols: ['BTCUSDT'],
@@ -63,10 +148,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 60
-    });
+    }, TEST_USER_ID);
 
     const testBlacklistSymbol = `SCAM_${testTimestamp}`;
-    const newBlacklist = db.addBlacklistEntry({
+    const newBlacklist = await db.addBlacklistEntry({
       symbol: testBlacklistSymbol,
       exchange: 'BINANCE',
       category: 'CRYPTO',
@@ -74,7 +159,7 @@ async function runVerification() {
     });
 
     const testPresetName = `Verify_Preset_${testTimestamp}`;
-    const newPreset = db.saveFilterPreset({
+    const newPreset = await db.saveFilterPreset({
       name: testPresetName,
       isDefault: false,
       filters: {
@@ -84,23 +169,23 @@ async function runVerification() {
         sortBy: 'volumeUsd',
         sortOrder: 'desc'
       }
-    });
+    }, TEST_USER_ID);
 
     // 2. Force SQLite persistence to disk
-    db.persistToDisk();
+    await db.persistToDisk();
 
     // 3. Verify all records exist and survive reload
-    const loadedWatchlists = db.getWatchlists();
+    const loadedWatchlists = await db.getWatchlists(TEST_USER_ID);
     const targetWatchlist = loadedWatchlists.find(w => w.id === newWatchlist.id);
     const hasItems = targetWatchlist && targetWatchlist.items.some(i => i.symbol === 'SOLUSDT');
 
-    const loadedRules = db.getAlertRules();
+    const loadedRules = await db.getAlertRules(TEST_USER_ID);
     const targetRule = loadedRules.find(r => r.id === newRule.id);
 
-    const loadedBlacklist = db.getBlacklist();
+    const loadedBlacklist = await db.getBlacklist();
     const targetBlacklist = loadedBlacklist.find(b => b.symbol === testBlacklistSymbol);
 
-    const loadedPresets = db.getFilterPresets();
+    const loadedPresets = await db.getFilterPresets(TEST_USER_ID);
     const targetPreset = loadedPresets.find(p => p.id === newPreset.id);
 
     const persistencePassed = Boolean(targetWatchlist && hasItems && targetRule && targetBlacklist && targetPreset);
@@ -116,10 +201,10 @@ async function runVerification() {
     );
 
     // Cleanup test records
-    if (targetWatchlist) db.deleteWatchlist(targetWatchlist.id);
-    if (targetRule) db.deleteAlertRule(targetRule.id);
-    if (targetBlacklist) db.removeBlacklistEntry(targetBlacklist.id);
-    if (targetPreset) db.deleteFilterPreset(targetPreset.id);
+    if (targetWatchlist) await db.deleteWatchlist(targetWatchlist.id, TEST_USER_ID);
+    if (targetRule) await db.deleteAlertRule(targetRule.id, TEST_USER_ID);
+    if (targetBlacklist) await db.removeBlacklistEntry(targetBlacklist.id);
+    if (targetPreset) await db.deleteFilterPreset(targetPreset.id, TEST_USER_ID);
   } catch (err: any) {
     record('DATABASE', 'SQLite Disk Persistence Across Restart', false, `Error: ${err.message}`);
   }
@@ -127,7 +212,7 @@ async function runVerification() {
   // -------------------------------------------------------------
   // PART 2: DETERMINISTIC WALL ENGINE TESTS
   // -------------------------------------------------------------
-  console.log('\n>>> [2/7] Running Deterministic Wall Engine Tests...');
+  console.log('\n>>> [2/8] Running Deterministic Wall Engine Tests...');
   try {
     const wallEngine = WallEngine.getInstance();
     const marketState = MarketStateService.getInstance();
@@ -157,8 +242,8 @@ async function runVerification() {
     };
     const byTicker: MarketTicker = { ...bTicker, exchange: 'BYBIT' };
 
-    marketState.updateTicker(bTicker);
-    marketState.updateTicker(byTicker);
+    await marketState.updateTicker(bTicker);
+    await marketState.updateTicker(byTicker);
 
     const binanceBook: OrderBookSnapshot = {
       symbol: sym,
@@ -181,13 +266,13 @@ async function runVerification() {
       timestamp: Date.now()
     };
 
-    marketState.updateOrderBook(binanceBook);
-    marketState.updateOrderBook(bybitBook);
+    await marketState.updateOrderBook(binanceBook);
+    await marketState.updateOrderBook(bybitBook);
 
     // 2A: crossExchangeAggregation = false
     wallEngine.setConfig({ minVolumeUsd: 500000, maxDistancePercent: 2.5, minDurationSeconds: 0, crossExchangeAggregation: false });
-    wallEngine.processOrderBook(binanceBook);
-    wallEngine.processOrderBook(bybitBook);
+    await wallEngine.processOrderBook(binanceBook);
+    await wallEngine.processOrderBook(bybitBook);
 
     const noAggWalls = wallEngine.getActiveWalls(sym);
     const pass2A = noAggWalls.length === 0;
@@ -203,8 +288,8 @@ async function runVerification() {
 
     // 2B: crossExchangeAggregation = true
     wallEngine.setConfig({ minVolumeUsd: 500000, maxDistancePercent: 2.5, minDurationSeconds: 0, crossExchangeAggregation: true });
-    wallEngine.processOrderBook(binanceBook);
-    wallEngine.processOrderBook(bybitBook);
+    await wallEngine.processOrderBook(binanceBook);
+    await wallEngine.processOrderBook(bybitBook);
 
     const aggWalls = wallEngine.getActiveWalls(sym);
     const aggWall = aggWalls.find(w => w.volumeUsd === 600000 || w.isAggregated);
@@ -246,7 +331,7 @@ async function runVerification() {
       timestamp: Date.now(),
       isLive: true
     };
-    marketState.updateTicker(futTicker);
+    await marketState.updateTicker(futTicker);
 
     const futBook: OrderBookSnapshot = {
       symbol: futSym,
@@ -258,10 +343,10 @@ async function runVerification() {
       spreadPercent: 0.005,
       timestamp: Date.now()
     };
-    marketState.updateOrderBook(futBook);
+    await marketState.updateOrderBook(futBook);
 
     wallEngine.setConfig({ minVolumeUsd: 500000, maxDistancePercent: 2.5, minDurationSeconds: 0, crossExchangeAggregation: false });
-    wallEngine.processOrderBook(futBook);
+    await wallEngine.processOrderBook(futBook);
 
     const futWalls = wallEngine.getActiveWalls(futSym, 'FUTURES');
     const futWall = futWalls.find(w => w.price === wallBid);
@@ -295,7 +380,7 @@ async function runVerification() {
       timestamp: Date.now(),
       isLive: true
     };
-    marketState.updateTicker(lcTicker);
+    await marketState.updateTicker(lcTicker);
 
     wallEngine.setConfig({ minVolumeUsd: 500000, maxDistancePercent: 3.0, minDurationSeconds: 1, crossExchangeAggregation: false });
     const wallBook1: OrderBookSnapshot = {
@@ -308,16 +393,16 @@ async function runVerification() {
       spreadPercent: 0.001,
       timestamp: Date.now()
     };
-    marketState.updateOrderBook(wallBook1);
+    await marketState.updateOrderBook(wallBook1);
 
     // Step 1: Initial event -> FORMING
-    wallEngine.processOrderBook(wallBook1);
+    await wallEngine.processOrderBook(wallBook1);
     let currentWalls = wallEngine.getActiveWalls(lcSym);
     const isForming = currentWalls.length === 1 && currentWalls[0].state === 'FORMING';
 
     // Step 2: Wait 1.1s and process again -> CONFIRMED
     await new Promise(r => setTimeout(r, 1100));
-    wallEngine.processOrderBook(wallBook1);
+    await wallEngine.processOrderBook(wallBook1);
     currentWalls = wallEngine.getActiveWalls(lcSym);
     const isConfirmed = currentWalls.length === 1 && currentWalls[0].state === 'CONFIRMED';
 
@@ -332,10 +417,10 @@ async function runVerification() {
       spreadPercent: 0.001,
       timestamp: Date.now()
     };
-    marketState.updateOrderBook(wallBookEmpty);
+    await marketState.updateOrderBook(wallBookEmpty);
     // Wait for the 4s lifecycle threshold and trigger expired wall cleanup
     await new Promise(r => setTimeout(r, 4100));
-    wallEngine.scanExpiredWalls(4000);
+    await wallEngine.scanExpiredWalls(4000);
     currentWalls = wallEngine.getActiveWalls(lcSym);
     const isRemoved = currentWalls.length === 0;
 
@@ -356,7 +441,7 @@ async function runVerification() {
   // -------------------------------------------------------------
   // PART 3: DETERMINISTIC ALERT ENGINE TESTS (Rules & Cooldown)
   // -------------------------------------------------------------
-  console.log('\n>>> [3/7] Running Deterministic Alert Engine Tests...');
+  console.log('\n>>> [3/10] Running Deterministic Alert Engine Tests...');
   try {
     const db = DatabaseService.getInstance();
     const alertEngine = AlertEngine.getInstance();
@@ -368,11 +453,11 @@ async function runVerification() {
 
     const testSym = 'ALERT_TEST_BTC';
     // Clean any prior rules for this symbol
-    const existingRules = db.getAlertRules().filter(r => r.symbols.includes(testSym));
-    for (const r of existingRules) db.deleteAlertRule(r.id);
+    const existingRules = (await db.getAlertRules(TEST_USER_ID)).filter(r => r.symbols.includes(testSym));
+    for (const r of existingRules) await db.deleteAlertRule(r.id, TEST_USER_ID);
 
     // Rule 1: PRICE_ABOVE ($100,000)
-    const ruleAbove = db.saveAlertRule({
+    const ruleAbove = await db.saveAlertRule({
       name: 'Test Price Above',
       enabled: true,
       symbols: [testSym],
@@ -382,10 +467,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // Rule 2: PRICE_BELOW ($50,000)
-    const ruleBelow = db.saveAlertRule({
+    const ruleBelow = await db.saveAlertRule({
       name: 'Test Price Below',
       enabled: true,
       symbols: [testSym],
@@ -395,10 +480,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // Rule 3: RSI_OVERSOLD (<= 30)
-    const ruleRsi = db.saveAlertRule({
+    const ruleRsi = await db.saveAlertRule({
       name: 'Test RSI Oversold',
       enabled: true,
       symbols: [testSym],
@@ -408,10 +493,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // Rule 4: VOLUME_SPIKE
-    const ruleVol = db.saveAlertRule({
+    const ruleVol = await db.saveAlertRule({
       name: 'Test Volume Spike',
       enabled: true,
       symbols: [testSym],
@@ -421,10 +506,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // Rule 5: PERCENTAGE_CHANGE
-    const rulePct = db.saveAlertRule({
+    const rulePct = await db.saveAlertRule({
       name: 'Test Pct Change',
       enabled: true,
       symbols: [testSym],
@@ -434,10 +519,10 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // Rule 6: FUNDING_RATE_ANOMALY (>= 0.05%)
-    const ruleFunding = db.saveAlertRule({
+    const ruleFunding = await db.saveAlertRule({
       name: 'Test Funding Anomaly',
       enabled: true,
       symbols: [testSym],
@@ -447,7 +532,7 @@ async function runVerification() {
       logic: 'AND',
       notifyChannels: ['IN_APP'],
       cooldownSeconds: 5
-    });
+    }, TEST_USER_ID);
 
     // TEST EVALUATION
     const ticker1: MarketTicker = {
@@ -470,7 +555,7 @@ async function runVerification() {
     };
 
     receivedTriggers.length = 0;
-    alertEngine.evaluateTicker(ticker1);
+    await alertEngine.evaluateTicker(ticker1);
 
     const triggeredAbove = receivedTriggers.some(t => t.ruleId === ruleAbove.id);
     const triggeredRsi = receivedTriggers.some(t => t.ruleId === ruleRsi.id);
@@ -492,7 +577,7 @@ async function runVerification() {
     // TEST COOLDOWN
     receivedTriggers.length = 0;
     // Immediate second evaluation (should be blocked by 5s cooldown)
-    alertEngine.evaluateTicker(ticker1);
+    await alertEngine.evaluateTicker(ticker1);
     const cooldownBlocked = receivedTriggers.length === 0;
 
     record(
@@ -505,12 +590,12 @@ async function runVerification() {
     );
 
     // Cleanup
-    db.deleteAlertRule(ruleAbove.id);
-    db.deleteAlertRule(ruleBelow.id);
-    db.deleteAlertRule(ruleRsi.id);
-    db.deleteAlertRule(ruleVol.id);
-    db.deleteAlertRule(rulePct.id);
-    db.deleteAlertRule(ruleFunding.id);
+    await db.deleteAlertRule(ruleAbove.id, TEST_USER_ID);
+    await db.deleteAlertRule(ruleBelow.id, TEST_USER_ID);
+    await db.deleteAlertRule(ruleRsi.id, TEST_USER_ID);
+    await db.deleteAlertRule(ruleVol.id, TEST_USER_ID);
+    await db.deleteAlertRule(rulePct.id, TEST_USER_ID);
+    await db.deleteAlertRule(ruleFunding.id, TEST_USER_ID);
   } catch (err: any) {
     record('ALERT_ENGINE', 'Alert Engine Tests', false, `Error: ${err.message}`);
   }
@@ -518,14 +603,14 @@ async function runVerification() {
   // -------------------------------------------------------------
   // PART 4: BLACKLIST INGESTION & SCREENER PRE-FILTER
   // -------------------------------------------------------------
-  console.log('\n>>> [4/7] Testing Global Blacklist Pre-Filtering...');
+  console.log('\n>>> [4/10] Testing Global Blacklist Pre-Filtering...');
   try {
     const db = DatabaseService.getInstance();
     const marketState = MarketStateService.getInstance();
 
     const blkSym = 'TEST_BLACK_TOKEN';
     // 1. Seed ticker in market state
-    marketState.updateTicker({
+    await marketState.updateTicker({
       symbol: blkSym,
       baseAsset: 'BLACK',
       quoteAsset: 'USDT',
@@ -543,18 +628,18 @@ async function runVerification() {
       isLive: true
     });
 
-    const initialIsBlacklisted = marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
+    const initialIsBlacklisted = await marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
     
     // 2. Add to Blacklist
-    const entry = db.addBlacklistEntry({
+    const entry = await db.addBlacklistEntry({
       symbol: blkSym,
       exchange: 'BINANCE',
       category: 'CRYPTO',
       reason: 'Temporary blacklist runtime verification test'
     });
 
-    const isNowBlacklisted = marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
-    const filteredTickers = marketState.filterTickers({
+    const isNowBlacklisted = await marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
+    const filteredTickers = await marketState.filterTickers({
       searchQuery: '',
       category: 'ALL',
       marketType: 'ALL',
@@ -567,8 +652,8 @@ async function runVerification() {
     const inFiltered = filteredTickers.some(t => t.symbol === blkSym && t.exchange === 'BINANCE');
 
     // 3. Remove from blacklist to restore original state
-    db.removeBlacklistEntry(entry.id);
-    const restoredIsBlacklisted = marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
+    await db.removeBlacklistEntry(entry.id);
+    const restoredIsBlacklisted = await marketState.isBlacklisted(blkSym, 'BINANCE', 'CRYPTO');
 
     const blkPassed = !initialIsBlacklisted && isNowBlacklisted && !inFiltered && !restoredIsBlacklisted;
 
@@ -587,7 +672,7 @@ async function runVerification() {
   // -------------------------------------------------------------
   // PART 5: LIVE BINANCE WEBSOCKET & REST STREAM VERIFICATION
   // -------------------------------------------------------------
-  console.log('\n>>> [5/7] Testing Live Binance Spot & Futures Data Capture (15s Real Stream)...');
+  console.log('\n>>> [5/16] Testing Live Binance Spot & Futures Data Capture (15s Real Stream)...');
   try {
     const binance = new BinanceConnector();
     
@@ -672,7 +757,7 @@ async function runVerification() {
     // -------------------------------------------------------------
     // PART 6: WEBSOCKET DISCONNECT & RECONNECT VERIFICATION
     // -------------------------------------------------------------
-    console.log('\n>>> [6/7] Testing WebSocket Disconnect & Reconnect Handling...');
+    console.log('\n>>> [6/9] Testing WebSocket Disconnect & Reconnect Handling...');
     const prevCount = spotTickersReceived;
     
     // Disconnect explicitly
@@ -702,7 +787,294 @@ async function runVerification() {
   }
 
   // -------------------------------------------------------------
-  // PART 7: SUMMARY
+  // PART 7: LIVE BYBIT WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  console.log('\n>>> [7/16] Testing Live Bybit Spot & Linear Data Capture (12s Real Stream)...');
+  try {
+    const bybit = new BybitConnector();
+
+    let bybitSpotTickers = 0;
+    let bybitLinearTickers = 0;
+    let bybitOrderBooks = 0;
+    const bybitPrices = new Map<string, number>();
+
+    bybit.onTicker((ticker) => {
+      bybitPrices.set(`${ticker.exchange}_${ticker.marketType}_${ticker.symbol}`, ticker.lastPrice);
+      if (ticker.marketType === 'SPOT') bybitSpotTickers++;
+      if (ticker.marketType === 'FUTURES') bybitLinearTickers++;
+    });
+
+    bybit.onOrderBook(() => {
+      bybitOrderBooks++;
+    });
+
+    await bybit.connect();
+    console.log('[Live Test] Connected to Bybit. Capturing live market stream for 12 seconds...');
+
+    // Wait 12 seconds to accumulate live events
+    await new Promise(r => setTimeout(r, 12000));
+
+    const btcPrice = bybitPrices.get('BYBIT_SPOT_BTCUSDT');
+    const ethPrice = bybitPrices.get('BYBIT_SPOT_ETHUSDT');
+    const solPrice = bybitPrices.get('BYBIT_SPOT_SOLUSDT');
+
+    const bybitPassed = Boolean(
+      bybitSpotTickers > 0 &&
+      bybitOrderBooks > 0 &&
+      btcPrice && btcPrice > 0 &&
+      ethPrice && ethPrice > 0 &&
+      solPrice && solPrice > 0
+    );
+
+    record(
+      'BYBIT_LIVE',
+      'Live Bybit Spot & Linear Stream (BTC, ETH, SOL)',
+      bybitPassed,
+      bybitPassed
+        ? `PASSED: Captured ${bybitSpotTickers} Spot ticks, ${bybitLinearTickers} Linear ticks, ${bybitOrderBooks} orderbooks. Live BTC: $${btcPrice?.toLocaleString()}, ETH: $${ethPrice?.toLocaleString()}, SOL: $${solPrice?.toLocaleString()}.`
+        : `FAILED: Live feed did not receive all required streams.`,
+      {
+        bybitSpotTickers,
+        bybitLinearTickers,
+        bybitOrderBooks,
+        btcPrice,
+        ethPrice,
+        solPrice
+      }
+    );
+
+    await bybit.disconnect();
+  } catch (err: any) {
+    record('BYBIT_LIVE', 'Live Bybit Spot & Linear Stream', false, `Error: ${err.message}`);
+  }
+
+  // -------------------------------------------------------------
+  // PART 8: LIVE OKX WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  console.log('\n>>> [8/10] Testing Live OKX Spot Data Capture (12s Real Stream)...');
+  try {
+    const okx = new OKXConnector();
+
+    let okxSpotTickers = 0;
+    let okxOrderBooks = 0;
+    const okxPrices = new Map<string, number>();
+    const okxBookDepths = new Map<string, { bids: number; asks: number }>();
+
+    okx.onTicker((ticker) => {
+      okxPrices.set(`${ticker.exchange}_${ticker.marketType}_${ticker.symbol}`, ticker.lastPrice);
+      if (ticker.marketType === 'SPOT') okxSpotTickers++;
+    });
+
+    okx.onOrderBook((ob) => {
+      okxOrderBooks++;
+      okxBookDepths.set(`${ob.exchange}_${ob.marketType}_${ob.symbol}`, {
+        bids: ob.bids.length,
+        asks: ob.asks.length
+      });
+    });
+
+    await okx.connect();
+    console.log('[Live Test] Connected to OKX. Capturing live market stream for 12 seconds...');
+
+    // Wait 12 seconds to accumulate live events
+    await new Promise(r => setTimeout(r, 12000));
+
+    const btcPrice = okxPrices.get('OKX_SPOT_BTC-USDT');
+    const ethPrice = okxPrices.get('OKX_SPOT_ETH-USDT');
+    const solPrice = okxPrices.get('OKX_SPOT_SOL-USDT');
+    const xrpPrice = okxPrices.get('OKX_SPOT_XRP-USDT');
+    const btcDepth = okxBookDepths.get('OKX_SPOT_BTC-USDT');
+
+    const okxPassed = Boolean(
+      okxSpotTickers > 0 &&
+      okxOrderBooks > 0 &&
+      btcPrice && btcPrice > 0 &&
+      ethPrice && ethPrice > 0 &&
+      solPrice && solPrice > 0 &&
+      xrpPrice && xrpPrice > 0 &&
+      btcDepth && btcDepth.bids > 0 && btcDepth.asks > 0
+    );
+
+    record(
+      'OKX_LIVE',
+      'Live OKX Spot Stream (BTC, ETH, SOL, XRP)',
+      okxPassed,
+      okxPassed
+        ? `PASSED: Captured ${okxSpotTickers} Spot ticks, ${okxOrderBooks} orderbooks. Live BTC: $${btcPrice?.toLocaleString()}, ETH: $${ethPrice?.toLocaleString()}, SOL: $${solPrice?.toLocaleString()}, XRP: $${xrpPrice?.toLocaleString()}. BTC Book depth: ${btcDepth?.bids} bids / ${btcDepth?.asks} asks.`
+        : `FAILED: Live feed did not receive all required streams.`,
+      {
+        okxSpotTickers,
+        okxOrderBooks,
+        btcPrice,
+        ethPrice,
+        solPrice,
+        xrpPrice,
+        btcDepth
+      }
+    );
+
+    await okx.disconnect();
+  } catch (err: any) {
+    record('OKX_LIVE', 'Live OKX Spot Stream', false, `Error: ${err.message}`);
+  }
+
+  // -------------------------------------------------------------
+  // PART 9: LIVE MEXC WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  console.log('\n>>> [9/16] Testing Live MEXC Spot Data Capture (12s Real Stream)...');
+  try {
+    const mexc = new MEXCConnector();
+
+    let mexcSpotTickers = 0;
+    let mexcOrderBooks = 0;
+    const mexcPrices = new Map<string, number>();
+    const mexcBookDepths = new Map<string, { bids: number; asks: number }>();
+
+    mexc.onTicker((ticker) => {
+      mexcPrices.set(`${ticker.exchange}_${ticker.marketType}_${ticker.symbol}`, ticker.lastPrice);
+      if (ticker.marketType === 'SPOT') mexcSpotTickers++;
+    });
+
+    mexc.onOrderBook((ob) => {
+      mexcOrderBooks++;
+      mexcBookDepths.set(`${ob.exchange}_${ob.marketType}_${ob.symbol}`, {
+        bids: ob.bids.length,
+        asks: ob.asks.length
+      });
+    });
+
+    await mexc.connect();
+    console.log('[Live Test] Connected to MEXC. Capturing live market stream for 12 seconds...');
+
+    // Wait 12 seconds to accumulate live events
+    await new Promise(r => setTimeout(r, 12000));
+
+    const btcPrice = mexcPrices.get('MEXC_SPOT_BTCUSDT');
+    const ethPrice = mexcPrices.get('MEXC_SPOT_ETHUSDT');
+    const solPrice = mexcPrices.get('MEXC_SPOT_SOLUSDT');
+    const xrpPrice = mexcPrices.get('MEXC_SPOT_XRPUSDT');
+    const btcDepth = mexcBookDepths.get('MEXC_SPOT_BTCUSDT');
+
+    const mexcPassed = Boolean(
+      mexcSpotTickers > 0 &&
+      mexcOrderBooks > 0 &&
+      btcPrice && btcPrice > 0 &&
+      ethPrice && ethPrice > 0 &&
+      solPrice && solPrice > 0 &&
+      xrpPrice && xrpPrice > 0 &&
+      btcDepth && btcDepth.bids > 0 && btcDepth.asks > 0
+    );
+
+    record(
+      'MEXC_LIVE',
+      'Live MEXC Spot Stream (BTC, ETH, SOL, XRP)',
+      mexcPassed,
+      mexcPassed
+        ? `PASSED: Captured ${mexcSpotTickers} Spot ticks, ${mexcOrderBooks} orderbooks. Live BTC: $${btcPrice?.toLocaleString()}, ETH: $${ethPrice?.toLocaleString()}, SOL: $${solPrice?.toLocaleString()}, XRP: $${xrpPrice?.toLocaleString()}. BTC Book depth: ${btcDepth?.bids} bids / ${btcDepth?.asks} asks.`
+        : `FAILED: Live feed did not receive all required streams.`,
+      {
+        mexcSpotTickers,
+        mexcOrderBooks,
+        btcPrice,
+        ethPrice,
+        solPrice,
+        xrpPrice,
+        btcDepth
+      }
+    );
+
+    await mexc.disconnect();
+  } catch (err: any) {
+    record('MEXC_LIVE', 'Live MEXC Spot Stream', false, `Error: ${err.message}`);
+  }
+
+  // -------------------------------------------------------------
+  // PART 10: LIVE GATE.IO WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  await runLiveExchangeCheck({
+    marker: '[10/16]',
+    sectionTag: 'GATE_LIVE',
+    displayName: 'Testing Live Gate.io Spot Data Capture (12s Real Stream)',
+    connector: new GateConnector(),
+    expected: ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT'].map(s => ({ symbol: s, marketType: 'SPOT' as const })),
+    durationMs: 12000
+  });
+
+  // -------------------------------------------------------------
+  // PART 11: LIVE BITGET WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  await runLiveExchangeCheck({
+    marker: '[11/16]',
+    sectionTag: 'BITGET_LIVE',
+    displayName: 'Testing Live Bitget Spot Data Capture (12s Real Stream)',
+    connector: new BitgetConnector(),
+    expected: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'].map(s => ({ symbol: s, marketType: 'SPOT' as const })),
+    durationMs: 12000
+  });
+
+  // -------------------------------------------------------------
+  // PART 12: LIVE KUCOIN WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  await runLiveExchangeCheck({
+    marker: '[12/16]',
+    sectionTag: 'KUCOIN_LIVE',
+    displayName: 'Testing Live KuCoin Spot Data Capture (15s Real Stream)',
+    connector: new KuCoinConnector(),
+    expected: ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT'].map(s => ({ symbol: s, marketType: 'SPOT' as const })),
+    durationMs: 15000
+  });
+
+  // -------------------------------------------------------------
+  // PART 13: LIVE HYPERLIQUID WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  await runLiveExchangeCheck({
+    marker: '[13/16]',
+    sectionTag: 'HYPERLIQUID_LIVE',
+    displayName: 'Testing Live Hyperliquid Futures Data Capture (12s Real Stream)',
+    connector: new HyperliquidConnector(),
+    expected: ['BTC', 'ETH', 'SOL', 'XRP'].map(s => ({ symbol: s, marketType: 'FUTURES' as const })),
+    durationMs: 12000
+  });
+
+  // -------------------------------------------------------------
+  // PART 14: LIVE ASTERDEX WEBSOCKET & REST STREAM VERIFICATION
+  // -------------------------------------------------------------
+  await runLiveExchangeCheck({
+    marker: '[14/16]',
+    sectionTag: 'ASTERDEX_LIVE',
+    displayName: 'Testing Live AsterDEX Spot Data Capture (15s Real Stream)',
+    connector: new AsterDEXConnector(),
+    expected: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'].map(s => ({ symbol: s, marketType: 'SPOT' as const })),
+    durationMs: 15000
+  });
+
+  // -------------------------------------------------------------
+  // PART 15: CONNECTOR MANAGER REGISTRATION HEALTH CHECK
+  // -------------------------------------------------------------
+  console.log('\n>>> [15/16] Testing ConnectorManager Registration & Production Readiness...');
+  try {
+    const cm = ConnectorManager.getInstance();
+    const all = cm.getConnectorStatuses();
+    const registered = all.map(c => c.exchange);
+    const expected = ['BINANCE', 'BYBIT', 'STOCK_EXCHANGE', 'OKX', 'MEXC', 'GATE', 'BITGET', 'KUCOIN', 'HYPERLIQUID', 'ASTERDEX'];
+    const allRegistered = expected.every(id => (registered as string[]).includes(id));
+    const allReady = all.every(c => c.isProductionReady === true);
+
+    record(
+      'CONNECTOR_MANAGER',
+      'ConnectorManager Registration & Production Readiness',
+      allRegistered && allReady,
+      (allRegistered && allReady)
+        ? `PASSED: ${all.length} connectors registered: ${registered.join(', ')}. All ${all.length} marked isProductionReady=true.`
+        : `FAILED: registered=${registered.join(', ')} | allRegistered=${allRegistered}, allReady=${allReady}`,
+      { registered, expected, allRegistered, allReady }
+    );
+  } catch (err: any) {
+    record('CONNECTOR_MANAGER', 'ConnectorManager Health Check', false, `Error: ${err.message}`);
+  }
+
+  // -------------------------------------------------------------
+  // PART 16: SUMMARY
   // -------------------------------------------------------------
   console.log('\n====================================================');
   console.log('            VERIFICATION SUMMARY REPORT             ');

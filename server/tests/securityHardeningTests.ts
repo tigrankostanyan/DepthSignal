@@ -1,6 +1,7 @@
-import { AuthService } from '../auth/AuthService.js';
-import { DatabaseService } from '../db/database.js';
-import { AlertRuleSchema } from '../validation/schemas.js';
+import { AuthService } from '../src/services/auth/AuthService.js';
+import { JWTServiceImpl } from '../src/services/auth/JWTService.js';
+import { DatabaseService } from '../src/db/database.js';
+import { AlertRuleSchema } from '../src/validation/schemas.js';
 
 export interface TestResult {
   suite: string;
@@ -16,20 +17,17 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
   await db.initialize();
   const auth = AuthService.getInstance();
 
-  // ----------------------------------------------------
-  // TEST A: User A cannot access User B watchlist
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
       const emailA = `usera_${Date.now()}@test.local`;
       const emailB = `userb_${Date.now()}@test.local`;
-      const userA = auth.register(emailA, 'Password123!', 'User A');
-      const userB = auth.register(emailB, 'Password123!', 'User B');
+      const userA = await auth.register(emailA, 'Password123!', 'User A');
+      const userB = await auth.register(emailB, 'Password123!', 'User B');
 
       // User B creates a private watchlist with a secret symbol
-      const wlB = db.createWatchlist('User B Alpha Secrets', userB.user.id);
-      db.addWatchlistItem(wlB.id, {
+      const wlB = await db.createWatchlist('User B Alpha Secrets', userB.user.id);
+      await db.addWatchlistItem(wlB.id, {
         symbol: 'BTCUSDT',
         exchange: 'BINANCE',
         marketType: 'SPOT',
@@ -37,14 +35,14 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
       }, userB.user.id);
 
       // User A queries their watchlists
-      const userAWatchlists = db.getWatchlists(userA.user.id);
+      const userAWatchlists = await db.getWatchlists(userA.user.id);
       const userASeesWlB = userAWatchlists.some(w => w.id === wlB.id || w.name === 'User B Alpha Secrets');
 
       // User A attempts direct lookup of User B watchlist by ID
-      const directLookup = db.getWatchlistById(wlB.id, userA.user.id);
+      const directLookup = await db.getWatchlistById(wlB.id, userA.user.id);
 
       // User A attempts to add item to User B's watchlist
-      const unauthorizedAdd = db.addWatchlistItem(wlB.id, {
+      const unauthorizedAdd = await db.addWatchlistItem(wlB.id, {
         symbol: 'ETHUSDT',
         exchange: 'BINANCE',
         marketType: 'SPOT'
@@ -70,19 +68,17 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST B: User A cannot modify User B alert
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
       const emailA = `alert_a_${Date.now()}@test.local`;
       const emailB = `alert_b_${Date.now()}@test.local`;
-      const userA = auth.register(emailA, 'Password123!', 'Alert User A');
-      const userB = auth.register(emailB, 'Password123!', 'Alert User B');
+      const userA = await auth.register(emailA, 'Password123!', 'Alert User A');
+      const userB = await auth.register(emailB, 'Password123!', 'Alert User B');
 
       // User B creates an alert rule
-      const ruleB = db.saveAlertRule({
+      const ruleB = await db.saveAlertRule({
         name: 'User B Critical Alert',
         enabled: true,
         symbols: ['BTCUSDT'],
@@ -103,7 +99,7 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
       // User A attempts to modify User B's alert rule
       let editBlocked = false;
       try {
-        db.saveAlertRule({
+        await db.saveAlertRule({
           id: ruleB.id,
           name: 'Hacked by User A',
           enabled: false,
@@ -128,10 +124,10 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
       }
 
       // User A attempts to delete User B's alert rule
-      const deleteResult = db.deleteAlertRule(ruleB.id, userA.user.id);
+      const deleteResult = await db.deleteAlertRule(ruleB.id, userA.user.id);
 
       // Verify User B's rule is still intact
-      const ruleBStillExists = db.getAlertRuleById(ruleB.id, userB.user.id);
+      const ruleBStillExists = await db.getAlertRuleById(ruleB.id, userB.user.id);
 
       const passed = editBlocked && deleteResult === false && ruleBStillExists !== null && ruleBStillExists.name === 'User B Critical Alert';
 
@@ -153,9 +149,7 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST C: Invalid alert threshold rejected by Schema
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
@@ -240,9 +234,7 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST D: Unauthorized SSE connection rejected
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
@@ -250,13 +242,13 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
       let rejectedFake = false;
 
       try {
-        auth.validateToken('');
+        await auth.validateToken('');
       } catch (err: any) {
         if (err.statusCode === 401) rejectedMissing = true;
       }
 
       try {
-        auth.validateToken('invalid_nonexistent_token_123456');
+        await auth.validateToken('invalid_nonexistent_token_123456');
       } catch (err: any) {
         if (err.statusCode === 401) rejectedFake = true;
       }
@@ -281,9 +273,7 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST E: Rate limiting activates correctly
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
@@ -328,9 +318,7 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST F: SQL injection-style input does not alter query structure
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
@@ -338,20 +326,21 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
       const emailInjection = "' OR '1'='1' --";
 
       // 1. Querying with injection email
-      const userLookup = db.getUserByEmail(emailInjection);
+      const userLookup = await db.getUserByEmail(emailInjection);
 
       // 2. Querying symbol with injection payload
-      const historyLookup = db.getWallHistory(sqlInjectionPayload);
+      const historyLookup = await db.getWallHistory(sqlInjectionPayload);
 
-      // 3. Creating watchlist with injection payload as name
-      const safeWl = db.createWatchlist(sqlInjectionPayload, 'usr_default_trader');
+      // 3. Creating watchlist with injection payload as name (bound to a real registered user)
+      const testUser = await auth.register(`sql_${Date.now()}@test.local`, 'SecurePassword123!', 'SQL Safety User');
+      const safeWl = await db.createWatchlist(sqlInjectionPayload, testUser.user.id);
 
       // 4. Verify watchlists table still exists and is intact
-      const allWls = db.getWatchlists('usr_default_trader');
-      const tableIntact = allWls.length > 0;
+      const allWls = await db.getWatchlists(testUser.user.id);
+      const tableIntact = allWls.some(w => w.id === safeWl.id);
 
       // Clean up test watchlist
-      db.deleteWatchlist(safeWl.id, 'usr_default_trader');
+      await db.deleteWatchlist(safeWl.id, testUser.user.id);
 
       const passed = userLookup === null && Array.isArray(historyLookup) && tableIntact;
 
@@ -373,34 +362,35 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
   // TEST G: Expired session denied
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
       const testEmail = `expired_${Date.now()}@test.local`;
-      const registered = auth.register(testEmail, 'SecurePassword123!', 'Expired Test User');
+      const registered = await auth.register(testEmail, 'SecurePassword123!', 'Expired Test User');
 
-      // Create an explicitly expired session token directly in db
-      const expiredToken = `exp_tok_${Date.now()}`;
+      // JWT architecture: sessions are refresh tokens stored as sha256 hashes.
+      // Create an explicitly expired session directly in db.
+      const jwtService = new JWTServiceImpl();
+      const expiredRawToken = jwtService.generateRefreshToken();
+      const expiredTokenHash = jwtService.hashToken(expiredRawToken);
       const pastTime = Date.now() - 10000; // 10s in past
-      db.createSession(registered.user.id, expiredToken, pastTime);
+      await db.createSession(registered.user.id, expiredTokenHash, pastTime);
 
       let expiredDenied = false;
       try {
-        auth.validateToken(expiredToken);
+        await auth.refreshAccessToken(expiredRawToken);
       } catch (err: any) {
-        if (err.statusCode === 401 && err.code === 'SESSION_EXPIRED') {
+        if (err.statusCode === 401 && err.code === 'REFRESH_TOKEN_EXPIRED') {
           expiredDenied = true;
         }
       }
 
       // Also verify revoked session is denied
-      auth.logout(registered.token, registered.user.id);
+      await auth.logout(registered.refreshToken, registered.user.id);
       let revokedDenied = false;
       try {
-        auth.validateToken(registered.token);
+        await auth.refreshAccessToken(registered.refreshToken);
       } catch (err: any) {
         if (err.statusCode === 401) {
           revokedDenied = true;
@@ -427,22 +417,19 @@ export async function runSecurityHardeningTests(): Promise<TestResult[]> {
     }
   }
 
-  // ----------------------------------------------------
-  // TEST H: Protected endpoint succeeds with valid auth
-  // ----------------------------------------------------
   {
     const start = Date.now();
     try {
       const validEmail = `valid_${Date.now()}@institution.local`;
-      const registered = auth.register(validEmail, 'StrongTraderPassword123!', 'Valid Trader');
+      const registered = await auth.register(validEmail, 'StrongTraderPassword123!', 'Valid Trader');
 
-      // Validate token
-      const validatedUser = auth.validateToken(registered.token);
+      // Validate the JWT access token issued at registration
+      const validatedUser = await auth.validateToken(registered.accessToken);
       const userMatches = validatedUser.id === registered.user.id && validatedUser.email === validEmail;
 
       // Access user-scoped data
-      const userSettings = db.getUserSettings(validatedUser.id);
-      const watchlists = db.getWatchlists(validatedUser.id);
+      const userSettings = await db.getUserSettings(validatedUser.id);
+      const watchlists = await db.getWatchlists(validatedUser.id);
 
       const passed = userMatches && userSettings !== null && Array.isArray(watchlists);
 

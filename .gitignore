@@ -4,5 +4,19 @@ dist/
 coverage/
 .DS_Store
 *.log
-.env*
+
+# Environment files (never commit real secrets)
+.env
+.env.*
 !.env.example
+
+# Next.js build output
+web/.next/
+web/out/
+next-env.d.ts
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Local database backups
+backups/

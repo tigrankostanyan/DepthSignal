@@ -4,14 +4,14 @@
 // ==========================================
 
 import crypto from 'crypto';
-import { DatabaseService } from '../db/database.js';
-import { EntitlementService } from '../billing/EntitlementService.js';
-import { UsageService } from '../billing/UsageService.js';
-import { StripeBillingProvider } from '../billing/StripeBillingProvider.js';
-import { NotificationQueue } from '../notifications/NotificationQueue.js';
-import { NotificationWorker } from '../notifications/NotificationWorker.js';
-import { validateWebhookDestination } from '../notifications/ssrfValidator.js';
-import { ResilientEmailNotifier } from '../notifications/ResilientNotifiers.js';
+import { DatabaseService } from '../src/db/database.js';
+import { EntitlementService } from '../src/services/billing/EntitlementService.js';
+import { UsageService } from '../src/services/billing/UsageService.js';
+import { StripeBillingProvider } from '../src/services/billing/StripeBillingProvider.js';
+import { NotificationQueue } from '../src/services/notifications/NotificationQueue.js';
+import { NotificationWorker } from '../src/services/notifications/NotificationWorker.js';
+import { validateWebhookDestination } from '../src/security/ssrfValidator.js';
+import { ResilientEmailNotifier } from '../src/services/notifications/ResilientNotifiers.js';
 
 export interface TestResult {
   suite: string;
@@ -51,7 +51,7 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   }
 
   // Create isolated test user with FREE tier
-  const createdFreeUser = db.createUser({
+  const createdFreeUser = await db.createUser({
     email: `free_tester_${Date.now()}@example.com`,
     passwordHash: 'testhash',
     passwordSalt: 'testsalt',
@@ -59,7 +59,7 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   });
   const testFreeUserId = createdFreeUser.id;
   // Explicitly set subscription to FREE
-  db.updateUserSubscription(testFreeUserId, {
+  await db.updateUserSubscription(testFreeUserId, {
     plan: 'FREE',
     status: 'active',
     billingProvider: 'sandbox'
@@ -69,12 +69,12 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test A: FREE user cannot exceed watchlist limit (PLAN_LIMIT_REACHED)
   // ----------------------------------------------------
   await runTest('Test A: FREE user cannot exceed watchlist limit (max 10 items)', async () => {
-    const watchlists = db.getWatchlists(testFreeUserId);
-    const wlId = watchlists[0]?.id || db.createWatchlist('Free Test WL', testFreeUserId).id;
+    const watchlists = await db.getWatchlists(testFreeUserId);
+    const wlId = watchlists[0]?.id || (await db.createWatchlist('Free Test WL', testFreeUserId)).id;
 
     // Add up to free limit (10)
     for (let i = 0; i < 10; i++) {
-      db.addWatchlistItem(wlId, {
+      await db.addWatchlistItem(wlId, {
         symbol: `COIN${i}USDT`,
         exchange: 'BINANCE',
         marketType: 'SPOT'
@@ -82,7 +82,7 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
     }
 
     // 11th item must be rejected
-    const check = entitlementService.canAddWatchlistItem(testFreeUserId, 'BINANCE');
+    const check = await entitlementService.canAddWatchlistItem(testFreeUserId, 'BINANCE');
     if (check.allowed) {
       throw new Error('Expected 11th watchlist item to be denied for FREE plan, but it was allowed.');
     }
@@ -96,12 +96,14 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // ----------------------------------------------------
   await runTest('Test B: FREE user cannot exceed active alerts limit (max 3 rules)', async () => {
     // Clear any existing
-    const existing = db.getAlertRules(testFreeUserId);
-    existing.forEach(r => db.deleteAlertRule(r.id, testFreeUserId));
+    const existing = await db.getAlertRules(testFreeUserId);
+    for (const r of existing) {
+      await db.deleteAlertRule(r.id, testFreeUserId);
+    }
 
     // Save 3 active rules
     for (let i = 1; i <= 3; i++) {
-      db.saveAlertRule({
+      await db.saveAlertRule({
         name: `Free Rule ${i}`,
         symbols: [`BTC${i}USDT`],
         exchanges: ['BINANCE'],
@@ -115,7 +117,7 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
     }
 
     // 4th active rule check must fail
-    const check = entitlementService.canCreateAlert(testFreeUserId, {
+    const check = await entitlementService.canCreateAlert(testFreeUserId, {
       name: 'Free Rule 4',
       enabled: true,
       notifyChannels: ['IN_APP'],
@@ -134,12 +136,12 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test C: FREE user cannot enable Telegram or Webhook channels
   // ----------------------------------------------------
   await runTest('Test C: FREE user cannot enable Telegram or Webhook notifications', async () => {
-    const telegramCheck = entitlementService.canUseChannel(testFreeUserId, 'TELEGRAM');
+    const telegramCheck = await entitlementService.canUseChannel(testFreeUserId, 'TELEGRAM');
     if (telegramCheck.allowed || telegramCheck.code !== 'CHANNEL_NOT_ALLOWED') {
       throw new Error('Expected TELEGRAM channel to be blocked for FREE user');
     }
 
-    const webhookCheck = entitlementService.canUseChannel(testFreeUserId, 'WEBHOOK');
+    const webhookCheck = await entitlementService.canUseChannel(testFreeUserId, 'WEBHOOK');
     if (webhookCheck.allowed || webhookCheck.code !== 'CHANNEL_NOT_ALLOWED') {
       throw new Error('Expected WEBHOOK channel to be blocked for FREE user');
     }
@@ -149,12 +151,12 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test D: FREE user cannot query historical walls past plan limit (1 day limit)
   // ----------------------------------------------------
   await runTest('Test D: FREE user cannot access historical walls past 1 day limit', async () => {
-    const check1Day = entitlementService.canAccessHistory(testFreeUserId, 1);
+    const check1Day = await entitlementService.canAccessHistory(testFreeUserId, 1);
     if (!check1Day.allowed) {
       throw new Error('Expected 1-day history to be allowed for FREE plan');
     }
 
-    const check7Days = entitlementService.canAccessHistory(testFreeUserId, 7);
+    const check7Days = await entitlementService.canAccessHistory(testFreeUserId, 7);
     if (check7Days.allowed || check7Days.code !== 'PLAN_LIMIT_REACHED') {
       throw new Error('Expected 7-day history query to be blocked for FREE plan');
     }
@@ -183,7 +185,8 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test F: Idempotent webhook event replay handling
   // ----------------------------------------------------
   await runTest('Test F: Authoritative webhook enforces idempotency on duplicate event IDs', async () => {
-    const provider = new StripeBillingProvider();
+    const secret = 'sandbox_webhook_signing_secret_key_v1';
+    const provider = new StripeBillingProvider({ webhookSecret: secret });
     const eventId = `evt_idempotent_test_${Date.now()}`;
     const payload = JSON.stringify({
       id: eventId,
@@ -192,7 +195,6 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
       plan: 'PRO'
     });
 
-    const secret = process.env.STRIPE_WEBHOOK_SECRET || 'sandbox_webhook_signing_secret_key_v1';
     const validSig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
 
     // 1st processing
@@ -208,7 +210,7 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
     }
 
     // Verify DB flag
-    const isProcessed = db.isWebhookEventProcessed(eventId);
+    const isProcessed = await db.isWebhookEventProcessed(eventId);
     if (!isProcessed) {
       throw new Error('Expected eventId to be recorded in billing_webhook_events table');
     }
@@ -246,11 +248,11 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test H: Telegram bot token is never exposed to client settings API responses
   // ----------------------------------------------------
   await runTest('Test H: Telegram bot token is safely stored and masked/omitted from client responses', async () => {
-    const settings = db.getUserSettings(testFreeUserId);
+    const settings = await db.getUserSettings(testFreeUserId);
     // Even if bot token is populated in DB, API response must mask or exclude raw secret
-    db.updateUserSettings({ telegramBotToken: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11' }, testFreeUserId);
+    await db.updateUserSettings({ telegramBotToken: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11' }, testFreeUserId);
     
-    const readBack = db.getUserSettings(testFreeUserId);
+    const readBack = await db.getUserSettings(testFreeUserId);
     if (!readBack.telegramBotToken) {
       throw new Error('Bot token was not persisted in database');
     }
@@ -260,10 +262,40 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test I: Delivery worker performs exponential backoff on retryable errors
   // ----------------------------------------------------
   await runTest('Test I: Delivery queue increments attempt count and calculates backoff for retryable errors', async () => {
-    const job = queue.enqueue({
-      id: `trig_test_${Date.now()}`,
+    // Persist a real alert rule + trigger first — alert_triggers has FKs on
+    // rule_id -> alert_rules.id and notification_deliveries on alert_trigger_id
+    const rule = await db.saveAlertRule({
+      name: 'Retry Test Rule',
+      symbols: ['BTCUSDT'],
+      exchanges: ['BINANCE'],
+      marketTypes: ['SPOT'],
+      logic: 'AND',
+      conditions: [{ id: 'c1', type: 'PRICE_ABOVE', params: { targetPrice: 100000 } }],
+      notifyChannels: ['WEBHOOK'],
+      cooldownSeconds: 60,
+      enabled: true
+    }, testFreeUserId);
+
+    const savedTrigger = await db.saveAlertTrigger({
       userId: testFreeUserId,
-      ruleId: 'r1',
+      ruleId: rule.id,
+      ruleName: 'Test Rule',
+      symbol: 'BTCUSDT',
+      exchange: 'BINANCE',
+      marketType: 'SPOT',
+      message: 'Test alert for retry worker',
+      conditionType: 'PRICE_ABOVE',
+      metricValue: '$95,000',
+      triggerPrice: 95000,
+      timestamp: Date.now(),
+      channel: 'WEBHOOK',
+      read: false
+    }, testFreeUserId);
+
+    const job = await queue.enqueue({
+      id: savedTrigger.id,
+      userId: testFreeUserId,
+      ruleId: rule.id,
       ruleName: 'Test Rule',
       symbol: 'BTCUSDT',
       exchange: 'BINANCE',
@@ -279,9 +311,9 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
 
     // Simulate a transient 500 error (retryable)
     const initialAttempts = job.attempts || 0;
-    queue.markFailed(job.id, initialAttempts, 4, 'Upstream 502 Bad Gateway', true);
+    await queue.markFailed(job.id, initialAttempts, 4, 'Upstream 502 Bad Gateway', true);
 
-    const updated = db.getNotificationDeliveryById(job.id);
+    const updated = await db.getNotificationDeliveryById(job.id);
     if (!updated) throw new Error('Job not found after failure update');
     if (updated.attempts !== initialAttempts + 1) {
       throw new Error(`Expected attempts to increment to ${initialAttempts + 1}, got ${updated.attempts}`);
@@ -298,10 +330,40 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
   // Test J: Delivery worker marks non-retryable failure immediately as failed
   // ----------------------------------------------------
   await runTest('Test J: Non-retryable error (malformed destination or SSRF) marked failed immediately', async () => {
-    const job = queue.enqueue({
-      id: `trig_test_nr_${Date.now()}`,
+    // Persist a real alert rule + trigger first — alert_triggers has FKs on
+    // rule_id -> alert_rules.id and notification_deliveries on alert_trigger_id
+    const rule = await db.saveAlertRule({
+      name: 'NonRetryable Test Rule',
+      symbols: ['ETHUSDT'],
+      exchanges: ['BINANCE'],
+      marketTypes: ['SPOT'],
+      logic: 'AND',
+      conditions: [{ id: 'c1', type: 'PRICE_ABOVE', params: { targetPrice: 5000 } }],
+      notifyChannels: ['EMAIL'],
+      cooldownSeconds: 60,
+      enabled: true
+    }, testFreeUserId);
+
+    const savedTrigger = await db.saveAlertTrigger({
       userId: testFreeUserId,
-      ruleId: 'r2',
+      ruleId: rule.id,
+      ruleName: 'Test Non-Retryable',
+      symbol: 'ETHUSDT',
+      exchange: 'BINANCE',
+      marketType: 'SPOT',
+      message: 'Test non-retryable alert',
+      conditionType: 'PRICE_ABOVE',
+      metricValue: '$3,500',
+      triggerPrice: 3500,
+      timestamp: Date.now(),
+      channel: 'EMAIL',
+      read: false
+    }, testFreeUserId);
+
+    const job = await queue.enqueue({
+      id: savedTrigger.id,
+      userId: testFreeUserId,
+      ruleId: rule.id,
       ruleName: 'Test Non-Retryable',
       symbol: 'ETHUSDT',
       exchange: 'BINANCE',
@@ -322,9 +384,9 @@ export async function runBillingAndNotificationTests(): Promise<TestResult[]> {
       throw new Error('Expected invalid email format to be marked non-retryable');
     }
 
-    queue.markFailed(job.id, job.attempts, job.maxAttempts, sendResult.error || 'Invalid destination', sendResult.retryable);
+    await queue.markFailed(job.id, job.attempts, job.maxAttempts, sendResult.error || 'Invalid destination', sendResult.retryable);
 
-    const updated = db.getNotificationDeliveryById(job.id);
+    const updated = await db.getNotificationDeliveryById(job.id);
     if (!updated) throw new Error('Job not found');
     if (updated.status !== 'failed') {
       throw new Error(`Expected status 'failed', got ${updated.status}`);

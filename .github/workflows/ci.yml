@@ -1,0 +1,82 @@
+# CI — lint, build and run the server test suites.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  server:
+    name: Server (lint + build + test:domain)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pw
+          MYSQL_DATABASE: quantscreen_db
+          MYSQL_USER: myscreener
+          MYSQL_PASSWORD: ci-app-pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uci -pci-root-pw"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build server bundle
+        run: npm run build
+
+      - name: Prepare test env
+        run: cp .env.example server/.env
+
+      - name: Domain + security tests
+        env:
+          NODE_ENV: test
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: ci-root-pw
+          MYSQL_DATABASE: quantscreen_db
+          REDIS_ENABLED: "false"
+          JWT_SECRET: ci-only-insecure-secret-for-tests-0123456789abcdef
+        run: npm run test:domain
+
+  web:
+    name: Web (lint + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: web
+
+      - name: Typecheck
+        run: npm run lint
+        working-directory: web
+
+      - name: Build Next.js app
+        run: npm run build
+        working-directory: web

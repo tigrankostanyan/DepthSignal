@@ -4,8 +4,8 @@
 // ==========================================
 
 import crypto from 'crypto';
-import { DatabaseService } from '../db/database.js';
-import { TelegramLinkingService, TELEGRAM_BOT_USERNAME } from '../notifications/TelegramLinkingService.js';
+import { DatabaseService } from '../src/db/database.js';
+import { TelegramLinkingService, TELEGRAM_BOT_USERNAME } from '../src/services/notifications/TelegramLinkingService.js';
 
 export interface TestResult {
   name: string;
@@ -20,6 +20,14 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
   const db = DatabaseService.getInstance();
   await db.initialize();
   const telegramService = TelegramLinkingService.getInstance();
+
+  // Generate unique Telegram IDs per run so the persistent SQLite DB from
+  // prior test runs cannot collide with freshly linked accounts.
+  let tgIdCounter = 0;
+  function uniqueTgId(): number {
+    tgIdCounter += 1;
+    return (Date.now() % 1000000000) + tgIdCounter;
+  }
 
   async function runTest(
     name: string,
@@ -46,6 +54,18 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     }
   }
 
+  // Create a real persisted user — telegram_link_tokens and related tables
+  // have FK constraints on user_id, so synthetic IDs are rejected by MySQL.
+  async function createTestUser(prefix: string): Promise<string> {
+    const user = await db.createUser({
+      email: `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}@test.local`,
+      passwordHash: 'testhash',
+      passwordSalt: 'testsalt',
+      name: `TG Test ${prefix}`
+    });
+    return user.id;
+  }
+
   // -------------------------------------------------------------
   // TEST 1: Cryptographic Linking Token Generation & Format
   // -------------------------------------------------------------
@@ -53,8 +73,8 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '1. Cryptographically secure token generation & deep link validation',
     'TELEGRAM_LINKING',
     async () => {
-      const testUserId = `usr_tg_test_${Math.random().toString(36).substring(2, 7)}`;
-      const tokenResp = telegramService.createLinkingToken(testUserId, 600000);
+      const testUserId = await createTestUser('tg_test');
+      const tokenResp = await telegramService.createLinkingToken(testUserId, 600000);
 
       if (!tokenResp.token || tokenResp.token.length < 32) {
         throw new Error(`Token is too short or empty: ${tokenResp.token}`);
@@ -71,7 +91,7 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
 
       // Verify that token in DB is hashed, not plain text
       const tokenHash = telegramService.hashToken(tokenResp.token);
-      const tokenRecord = db.getTelegramLinkTokenByHash(tokenHash);
+      const tokenRecord = await db.getTelegramLinkTokenByHash(tokenHash);
 
       if (!tokenRecord) {
         throw new Error('Token hash was not found in database');
@@ -98,11 +118,11 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '2. End-to-end account linking via /start token and immediate invalidation',
     'TELEGRAM_LINKING',
     async () => {
-      const testUserId = `usr_tg_link_${Math.random().toString(36).substring(2, 7)}`;
-      const tokenResp = telegramService.createLinkingToken(testUserId, 600000);
+      const testUserId = await createTestUser('tg_link');
+      const tokenResp = await telegramService.createLinkingToken(testUserId, 600000);
 
-      const fakeTgId = 987654321;
-      const fakeChatId = 987654321;
+      const fakeTgId = uniqueTgId();
+      const fakeChatId = fakeTgId;
       const fakeUsername = 'trader_bob';
 
       const linkResult = await telegramService.handleStartCommand(tokenResp.token, {
@@ -117,13 +137,13 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
 
       // Verify token is marked as used
       const tokenHash = telegramService.hashToken(tokenResp.token);
-      const tokenRecord = db.getTelegramLinkTokenByHash(tokenHash);
+      const tokenRecord = await db.getTelegramLinkTokenByHash(tokenHash);
       if (!tokenRecord || tokenRecord.usedAt === null) {
         throw new Error('Token was not marked as used in DB!');
       }
 
       // Verify link in database
-      const userLink = db.getUserTelegramLink(testUserId);
+      const userLink = await db.getUserTelegramLink(testUserId);
       if (!userLink || !userLink.enabled) {
         throw new Error('User telegram link record was not found or not enabled');
       }
@@ -137,13 +157,13 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
       }
 
       // Verify user_settings is synced
-      const settings = db.getUserSettings(testUserId);
+      const settings = await db.getUserSettings(testUserId);
       if (settings.telegramChatId !== String(fakeChatId)) {
         throw new Error(`user_settings.telegramChatId was not synced: got ${settings.telegramChatId}`);
       }
 
       // Verify status endpoint
-      const status = telegramService.getStatus(testUserId);
+      const status = await telegramService.getStatus(testUserId);
       if (!status.connected || status.telegramChatId !== String(fakeChatId)) {
         throw new Error('getStatus did not return connected === true with matching chat ID');
       }
@@ -157,13 +177,14 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '3. Replay attack rejection: reused token must fail immediately',
     'TELEGRAM_SECURITY',
     async () => {
-      const testUserId = `usr_tg_reuse_${Math.random().toString(36).substring(2, 7)}`;
-      const tokenResp = telegramService.createLinkingToken(testUserId, 600000);
+      const testUserId = await createTestUser('tg_reuse');
+      const tokenResp = await telegramService.createLinkingToken(testUserId, 600000);
 
       // First use: must succeed
+      const firstTgId = uniqueTgId();
       const res1 = await telegramService.handleStartCommand(tokenResp.token, {
-        id: 11223344,
-        chat_id: 11223344,
+        id: firstTgId,
+        chat_id: firstTgId,
         username: 'first_link'
       });
       if (!res1.success) {
@@ -171,9 +192,10 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
       }
 
       // Second use of the EXACT same token: MUST fail
+      const secondTgId = uniqueTgId();
       const res2 = await telegramService.handleStartCommand(tokenResp.token, {
-        id: 55667788,
-        chat_id: 55667788,
+        id: secondTgId,
+        chat_id: secondTgId,
         username: 'attacker'
       });
 
@@ -194,9 +216,9 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '4. Expired token rejection: expired linking token must fail',
     'TELEGRAM_SECURITY',
     async () => {
-      const testUserId = `usr_tg_exp_${Math.random().toString(36).substring(2, 7)}`;
+      const testUserId = await createTestUser('tg_exp');
       // Create with negative TTL -> immediately expired
-      const tokenResp = telegramService.createLinkingToken(testUserId, -10000);
+      const tokenResp = await telegramService.createLinkingToken(testUserId, -10000);
 
       const res = await telegramService.handleStartCommand(tokenResp.token, {
         id: 99887766,
@@ -251,14 +273,14 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '6. Account conflict prevention: cannot link already-claimed Telegram account to another user',
     'TELEGRAM_SECURITY',
     async () => {
-      const userA = `usr_tg_conflict_A_${Math.random().toString(36).substring(2, 7)}`;
-      const userB = `usr_tg_conflict_B_${Math.random().toString(36).substring(2, 7)}`;
+      const userA = await createTestUser('tg_conflict_a');
+      const userB = await createTestUser('tg_conflict_b');
 
-      const tokenA = telegramService.createLinkingToken(userA, 600000);
-      const tokenB = telegramService.createLinkingToken(userB, 600000);
+      const tokenA = await telegramService.createLinkingToken(userA, 600000);
+      const tokenB = await telegramService.createLinkingToken(userB, 600000);
 
-      const sharedTgId = 777888999;
-      const sharedChatId = 777888999;
+      const sharedTgId = uniqueTgId();
+      const sharedChatId = sharedTgId;
 
       // Link User A to Telegram ID 777888999
       const resA = await telegramService.handleStartCommand(tokenA.token, {
@@ -292,29 +314,30 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     '7. Disconnect flow: clears user links and updates settings safely',
     'TELEGRAM_LINKING',
     async () => {
-      const testUserId = `usr_tg_disc_${Math.random().toString(36).substring(2, 7)}`;
-      const tokenResp = telegramService.createLinkingToken(testUserId, 600000);
+      const testUserId = await createTestUser('tg_disc');
+      const tokenResp = await telegramService.createLinkingToken(testUserId, 600000);
 
+      const discTgId = uniqueTgId();
       await telegramService.handleStartCommand(tokenResp.token, {
-        id: 33445566,
-        chat_id: 33445566,
+        id: discTgId,
+        chat_id: discTgId,
         username: 'disconnect_me'
       });
 
       // Verify connected
-      let status = telegramService.getStatus(testUserId);
+      let status = await telegramService.getStatus(testUserId);
       if (!status.connected) throw new Error('Failed to establish initial connection');
 
       // Disconnect
-      telegramService.disconnect(testUserId);
+      await telegramService.disconnect(testUserId);
 
       // Verify status is now disconnected
-      status = telegramService.getStatus(testUserId);
+      status = await telegramService.getStatus(testUserId);
       if (status.connected) {
         throw new Error('Status still reports connected after disconnect()');
       }
 
-      const settings = db.getUserSettings(testUserId);
+      const settings = await db.getUserSettings(testUserId);
       if (settings.telegramChatId) {
         throw new Error(`user_settings.telegramChatId was not cleared: ${settings.telegramChatId}`);
       }
@@ -379,7 +402,7 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
     'TELEGRAM_NOTIFICATIONS',
     async () => {
       // 1. Unlinked user attempting test alert -> Returns clean validation error
-      const unlinkedUser = `usr_tg_unlinked_${Math.random().toString(36).substring(2, 7)}`;
+      const unlinkedUser = await createTestUser('tg_unlinked');
       const resUnlinked = await telegramService.sendTestAlert(unlinkedUser);
 
       if (resUnlinked.success) {
@@ -391,11 +414,12 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
       }
 
       // 2. Linked user without TELEGRAM_BOT_TOKEN -> Logs delivery record with failure status
-      const linkedUser = `usr_tg_linked_nobot_${Math.random().toString(36).substring(2, 7)}`;
-      const tokenResp = telegramService.createLinkingToken(linkedUser, 600000);
+      const linkedUser = await createTestUser('tg_linked');
+      const tokenResp = await telegramService.createLinkingToken(linkedUser, 600000);
+      const testAlertTgId = uniqueTgId();
       await telegramService.handleStartCommand(tokenResp.token, {
-        id: 44556677,
-        chat_id: 44556677,
+        id: testAlertTgId,
+        chat_id: testAlertTgId,
         username: 'test_alert_user'
       });
 
@@ -409,7 +433,7 @@ export async function runTelegramLinkingTests(): Promise<TestResult[]> {
         }
 
         // Verify a delivery failure was recorded in notification_deliveries table
-        const deliveries = db.getNotificationDeliveries('failed', 10);
+        const deliveries = await db.getNotificationDeliveries('failed', 10);
         const recorded = deliveries.find(d => d.userId === linkedUser && d.channel === 'TELEGRAM');
         if (!recorded) {
           throw new Error('Failed notification delivery was not recorded in notification_deliveries table');

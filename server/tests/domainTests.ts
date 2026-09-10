@@ -1,7 +1,7 @@
-import { DetectedWall, MarketTicker, OrderBookSnapshot } from '../../src/types/index.js';
-import { DatabaseService } from '../db/database.js';
-import { MarketStateService } from '../market-data/MarketStateService.js';
-import { WallEngine } from '../wall-engine/WallEngine.js';
+import { DetectedWall, MarketTicker, OrderBookSnapshot } from '../src/types/index.js';
+import { DatabaseService } from '../src/db/database.js';
+import { MarketStateService } from '../src/services/market-data/MarketStateService.js';
+import { WallEngine } from '../src/services/wall-engine/WallEngine.js';
 
 export interface TestResult {
   title: string;
@@ -49,8 +49,8 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       isLive: true
     };
     const bybitTicker: MarketTicker = { ...binanceTicker, exchange: 'BYBIT' };
-    marketState.updateTicker(binanceTicker);
-    marketState.updateTicker(bybitTicker);
+    await marketState.updateTicker(binanceTicker);
+    await marketState.updateTicker(bybitTicker);
 
     // 2. Prepare Orderbooks with $300,000 USD on each exchange at the exact same level
     const binanceOrderBook: OrderBookSnapshot = {
@@ -75,8 +75,8 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       timestamp: Date.now()
     };
 
-    marketState.updateOrderBook(binanceOrderBook);
-    marketState.updateOrderBook(bybitOrderBook);
+    await marketState.updateOrderBook(binanceOrderBook);
+    await marketState.updateOrderBook(bybitOrderBook);
 
     // Case A: crossExchangeAggregation = FALSE, minVolume = $500,000
     wallEngine.setConfig({
@@ -86,8 +86,8 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       crossExchangeAggregation: false // MANDATORY DEFAULT FALSE
     });
 
-    wallEngine.processOrderBook(binanceOrderBook);
-    wallEngine.processOrderBook(bybitOrderBook);
+    await wallEngine.processOrderBook(binanceOrderBook);
+    await wallEngine.processOrderBook(bybitOrderBook);
 
     const activeWallsWithoutAgg = wallEngine.getActiveWalls(symbol);
     const passedNoAgg = activeWallsWithoutAgg.length === 0;
@@ -100,8 +100,8 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       crossExchangeAggregation: true
     });
 
-    wallEngine.processOrderBook(binanceOrderBook);
-    wallEngine.processOrderBook(bybitOrderBook);
+    await wallEngine.processOrderBook(binanceOrderBook);
+    await wallEngine.processOrderBook(bybitOrderBook);
 
     const activeWallsWithAgg = wallEngine.getActiveWalls(symbol);
     const aggWall = activeWallsWithAgg.find(w => w.isAggregated || w.volumeUsd >= 500000);
@@ -162,7 +162,7 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       timestamp: Date.now(),
       isLive: true
     };
-    marketState.updateTicker(futuresTicker);
+    await marketState.updateTicker(futuresTicker);
 
     const futuresOrderBook: OrderBookSnapshot = {
       symbol,
@@ -182,7 +182,7 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       crossExchangeAggregation: false
     });
 
-    wallEngine.processOrderBook(futuresOrderBook);
+    await wallEngine.processOrderBook(futuresOrderBook);
 
     const activeFuturesWalls = wallEngine.getActiveWalls(symbol, 'FUTURES');
     const wall = activeFuturesWalls.find(w => w.price === wallBidPrice);
@@ -218,13 +218,13 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
   // -------------------------------------------------------------
   try {
     const testSymbol = 'SCAMTOKEN';
-    db.addBlacklistEntry({
+    await db.addBlacklistEntry({
       symbol: testSymbol,
       reason: 'Automated test blacklist verification',
       category: 'CRYPTO'
     });
 
-    const isBlacklisted = marketState.isBlacklisted(testSymbol, 'BINANCE', 'CRYPTO');
+    const isBlacklisted = await marketState.isBlacklisted(testSymbol, 'BINANCE', 'CRYPTO');
     results.push({
       title: 'Global Blacklist Pre-Ingestion Evaluation',
       category: 'BLACKLIST',
@@ -269,8 +269,8 @@ export async function runAllDomainTests(): Promise<TestResult[]> {
       updatedAt: Date.now()
     };
 
-    db.recordWallHistoricalOutcome(testWall, 'FILLED', 100);
-    const history = db.getWallHistory('SOLUSDT', 'BINANCE', 5);
+    await db.recordWallHistoricalOutcome(testWall, 'FILLED', 100);
+    const history = await db.getWallHistory('SOLUSDT', 'BINANCE', 5);
     const hasRecord = history.some(h => h.id === 'wh_wall_test_agg_1');
 
     results.push({

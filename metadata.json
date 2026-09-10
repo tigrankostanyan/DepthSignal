@@ -1,6 +1,0 @@
-{
-  "name": "Trading Screener",
-  "description": "Professional real-time market intelligence and screener platform for Crypto and Stocks with order book wall detection, advanced alert engine, and Binance live connector.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

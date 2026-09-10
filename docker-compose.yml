@@ -1,0 +1,109 @@
+# MyScreener — full stack (MySQL + Redis + app, optional nginx reverse proxy)
+#
+#   1. cp .env.example .env      # fill in real values
+#   2. docker compose up -d --build
+#   3. docker compose --profile proxy up -d nginx   # optional
+#
+# The app is a single image (API on 3002 internal, Next.js on 8080 external).
+# Do NOT set PORT for the app service — see docs/DEPLOYMENT.md.
+name: myscreener
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-quantscreen_db}
+      MYSQL_USER: ${MYSQL_APP_USER:-myscreener}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-change-me}
+    # Not published by default — only the app needs to reach it.
+    # Uncomment to inspect from the host:
+    # ports:
+    #   - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-change-me-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      # API stays on 3002 internally; Next.js serves the external 8080.
+      # Do not set PORT here.
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-quantscreen_db}
+      MYSQL_USER: ${MYSQL_APP_USER:-myscreener}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-change-me}
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (>=32 chars)}
+      ALLOW_DEV_ACCESS_BYPASS: "false"
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+      MANUAL_PAYMENT_QR_VALUE: ${MANUAL_PAYMENT_QR_VALUE:-}
+      MANUAL_PAYMENT_QR_IMAGE_URL: ${MANUAL_PAYMENT_QR_IMAGE_URL:-}
+      MANUAL_PAYMENT_INSTRUCTIONS: ${MANUAL_PAYMENT_INSTRUCTIONS:-}
+      MANUAL_PAYMENT_RECIPIENT: ${MANUAL_PAYMENT_RECIPIENT:-}
+      MANUAL_PAYMENT_NETWORK: ${MANUAL_PAYMENT_NETWORK:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    profiles: ["proxy"]
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+
+volumes:
+  mysql_data:
+  redis_data:

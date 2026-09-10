@@ -1,6 +1,13 @@
-import React from 'react';
-import RootLayout from './layout.js';
+'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 export default function HomePage() {
-  return <RootLayout />;
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace('/screener');
+  }, [router]);
+
+  return null;
 }

@@ -1,0 +1,84 @@
+import { DataTypes, Model, InferAttributes, InferCreationAttributes, CreationOptional } from 'sequelize';
+import { sequelize } from '../db/sequelize.js';
+
+//  detected wall
+export class DetectedWall extends Model<InferAttributes<DetectedWall>, InferCreationAttributes<DetectedWall>> {
+  // Id property
+  declare id: CreationOptional<string>;
+  // Symbol property
+  declare symbol: CreationOptional<string | null>;
+  // Exchange property
+  declare exchange: CreationOptional<string | null>;
+  // Market type property
+  declare marketType: CreationOptional<string | null>;
+  // Side property
+  declare side: CreationOptional<string | null>;
+  // Price property
+  declare price: CreationOptional<number | null>;
+  // Volume amount property
+  declare volumeAmount: CreationOptional<number | null>;
+  // Volume usd property
+  declare volumeUsd: CreationOptional<number | null>;
+  // Reference price property
+  declare referencePrice: CreationOptional<number | null>;
+  // Distance percent property
+  declare distancePercent: CreationOptional<number | null>;
+  // First seen at property
+  declare firstSeenAt: CreationOptional<number | null>;
+  // Last seen at property
+  declare lastSeenAt: CreationOptional<number | null>;
+  // Duration seconds property
+  declare durationSeconds: CreationOptional<number | null>;
+  // State property
+  declare state: CreationOptional<string | null>;
+  // Initial volume usd property
+  declare initialVolumeUsd: CreationOptional<number | null>;
+  // Peak volume usd property
+  declare peakVolumeUsd: CreationOptional<number | null>;
+  // Remaining volume usd property
+  declare remainingVolumeUsd: CreationOptional<number | null>;
+  // Is aggregated property
+  declare isAggregated: CreationOptional<number>;
+  // Contributing exchanges property
+  declare contributingExchanges: CreationOptional<string | null>;
+  // Created at property
+  declare createdAt: CreationOptional<number | null>;
+  // Updated at property
+  declare updatedAt: CreationOptional<number | null>;
+}
+
+DetectedWall.init(
+  {
+    id: { type: DataTypes.STRING, primaryKey: true },
+    symbol: { type: DataTypes.STRING, allowNull: true },
+    exchange: { type: DataTypes.STRING, allowNull: true },
+    marketType: { type: DataTypes.STRING, allowNull: true },
+    side: { type: DataTypes.STRING, allowNull: true },
+    price: { type: DataTypes.FLOAT, allowNull: true },
+    volumeAmount: { type: DataTypes.FLOAT, allowNull: true },
+    volumeUsd: { type: DataTypes.FLOAT, allowNull: true },
+    referencePrice: { type: DataTypes.FLOAT, allowNull: true },
+    distancePercent: { type: DataTypes.FLOAT, allowNull: true },
+    firstSeenAt: { type: DataTypes.BIGINT, allowNull: true },
+    lastSeenAt: { type: DataTypes.BIGINT, allowNull: true },
+    durationSeconds: { type: DataTypes.INTEGER, allowNull: true },
+    state: { type: DataTypes.STRING, allowNull: true },
+    initialVolumeUsd: { type: DataTypes.FLOAT, allowNull: true },
+    peakVolumeUsd: { type: DataTypes.FLOAT, allowNull: true },
+    remainingVolumeUsd: { type: DataTypes.FLOAT, allowNull: true },
+    isAggregated: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    contributingExchanges: { type: DataTypes.STRING, allowNull: true },
+    createdAt: { type: DataTypes.BIGINT, allowNull: true },
+    updatedAt: { type: DataTypes.BIGINT, allowNull: true },
+  },
+  {
+    sequelize,
+    modelName: 'DetectedWall',
+    tableName: 'detected_walls',
+    indexes: [
+      { fields: ['symbol'] },
+      { fields: ['exchange'] },
+      { fields: ['state'] },
+    ],
+  }
+);

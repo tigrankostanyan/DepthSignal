@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: var(--bg-primary);
+  --color-secondary: var(--bg-secondary);
+  --color-card: var(--bg-card);
+  --color-surface: var(--bg-surface);
+  --color-panel: var(--bg-panel);
+  --color-divider: var(--border-color);
+  --color-main: var(--text-main);
+  --color-muted: var(--text-muted);
+  --color-brand: var(--color-accent);
+  --color-accent: var(--color-accent);
+  --color-cyan: var(--color-cyan);
+  --color-bid: var(--color-bid);
+  --color-ask: var(--color-ask);
+}
+
+@layer base {
+  :root,
+  html,
+  body {
+    color-scheme: dark;
+
+    /* MyScreener Brand Identity Tokens (V1.0) */
+    --ms-midnight: #071522;
+    --ms-deep-navy: #0B1E33;
+    --ms-deep-blue: #173D9A;
+    --ms-royal-blue: #2455C3;
+    --ms-electric-blue: #168FD6;
+    --ms-cyan: #24C4E8;
+    --ms-light-cyan: #BCEFFF;
+    --ms-ink: #0B1724;
+    --ms-cloud: #F4F7FA;
+    --ms-gradient-primary: linear-gradient(42deg, #173D9A 0%, #2455C3 28%, #168FD6 61%, #24C4E8 86%, #BCEFFF 100%);
+    --ms-font-sans: var(--font-manrope), "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+    /* Institutional Terminal Dark Tokens - 100% Harmonious Brand Navy & Cyan */
+    --bg-primary: #071522;
+    --bg-secondary: #0B1E33;
+    --bg-card: #0B1E33;
+    --bg-surface: #0F253C;
+    --bg-panel: #132E4D;
+    --border-color: #1A3654;
+    --border-subtle: #102A45;
+    --text-main: #F7FBFF;
+    --text-muted: #8CA0B8;
+    --color-bid: #0ECB81;
+    --color-ask: #F6465D;
+    --color-accent: #168FD6;
+    --color-accent-hover: #24C4E8;
+    --color-cyan: #24C4E8;
+  }
+
+  body {
+    font-family: var(--ms-font-sans);
+    font-feature-settings: "tnum" on, "lnum" on;
+    background-color: var(--bg-primary);
+    color: var(--text-main);
+    overflow-x: hidden;
+  }
+
+  button, 
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+/* Brand Gradient Utilities */
+.bg-brand-gradient {
+  background: linear-gradient(42deg, #173D9A 0%, #2455C3 28%, #168FD6 61%, #24C4E8 86%, #BCEFFF 100%);
+}
+
+.text-brand-gradient {
+  background: linear-gradient(42deg, #173D9A 0%, #2455C3 28%, #168FD6 61%, #24C4E8 86%, #BCEFFF 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.border-brand-gradient {
+  border-image: linear-gradient(42deg, #173D9A 0%, #2455C3 28%, #168FD6 61%, #24C4E8 86%, #BCEFFF 100%) 1;
+}
+
+/* Tabular numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1A3654;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2455C3;
+}
+
+/* Flash price animations - Pure background color fill, zero box-shadow or edge frames */
+@keyframes flashGreenDark {
+  0% { 
+    background-color: rgba(14, 203, 129, 0.22) !important; 
+  }
+  100% { 
+    background-color: transparent; 
+  }
+}
+
+@keyframes flashRedDark {
+  0% { 
+    background-color: rgba(246, 70, 93, 0.22) !important; 
+  }
+  100% { 
+    background-color: transparent; 
+  }
+}
+
+.flash-up {
+  animation: flashGreenDark 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.flash-down {
+  animation: flashRedDark 1s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* ── Toast Slide-In Animation ── */
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

@@ -1,3 +1,6 @@
+// Load env BEFORE any other imports (same as server.ts)
+import '../src/env.js';
+
 import { runAllDomainTests } from './domainTests.js';
 import { runSecurityHardeningTests } from './securityHardeningTests.js';
 
